@@ -39,7 +39,13 @@
      mal escrito, el backend reintenta la compra sin el en vez de bloquearla
      (ver tienda_publica_comprar). El "10 €" es el importe fijo que genera
      hoy la campaña (candidatos_campana_bienvenida): si algun dia cambia el
-     importe alli, cambialo tambien aqui.
+     importe alli, cambialo tambien aqui — `test_campana_cupon.py` compara los
+     dos numeros y no deja que se separen.
+     EL CUPON VALE PARA LAS TRES PRENDAS (`_CAMPANA_CUPON_USOS`, tres usos en
+     Stripe). Por eso las tres tarjetas pueden enseñar su precio tachado a la
+     vez: hasta el 19-09-2026 el cupon era de un solo uso y el escaparate
+     prometia tres descuentos que no existian — quien compraba el hoodie se
+     encontraba el cortavientos a precio entero en la pantalla de pago.
      LA CUENTA ATRAS ES INFORMATIVA, no la autoridad: cada persona tiene su
      propio cupon con su propio reloj (uno por candidato, gotcha 18-09-2026 —
      sin esto, con un solo cupon compartido no habia forma de saber cuanto le
@@ -55,7 +61,7 @@
     var intervaloCupon;
     var pintaCupon = function () {
       if (isNaN(expMs)) {
-        banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> aplicado — se descuenta al pagar, mientras siga vigente.";
+        banner.innerHTML = "🎁 Tu cupón de bienvenida: <b>10 € en cada prenda</b> — se descuenta al pagar, mientras siga vigente.";
         return;
       }
       var restante = expMs - Date.now();
@@ -77,7 +83,7 @@
       var m = Math.floor((restante % 3600000) / 60000);
       var s = Math.floor((restante % 60000) / 1000);
       var falta = h > 0 ? (h + "h " + m + "min") : (m + "min " + s + "s");
-      banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> — quedan <b>" + falta + "</b> para usarlo.";
+      banner.innerHTML = "🎁 Tu cupón de bienvenida: <b>10 € en cada prenda</b> — quedan <b>" + falta + "</b> para usarlo.";
     };
     pintaCupon();
     intervaloCupon = setInterval(pintaCupon, 1000);
@@ -137,7 +143,9 @@
     var precio = precioDe(d, st.talla) * st.cant;
     // El cupon es un descuento FIJO sobre el TOTAL del pedido (asi lo aplica
     // Stripe, discounts[0][coupon] en la sesion), no por unidad: comprar 2 no
-    // descuenta el doble.
+    // descuenta el doble. Los tres usos del cupon son tres PEDIDOS -uno por
+    // prenda-, asi que dos unidades de la misma prenda siguen llevando un solo
+    // descuento de 10 EUR.
     var precioFinal = cuponVigente ? Math.max(0, precio - CUPON_EUR) : precio;
     var cajaPrecio = f.querySelector(".precio");
     var tachado = cajaPrecio.querySelector("[data-precio-tachado]");

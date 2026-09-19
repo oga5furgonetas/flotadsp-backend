@@ -50217,7 +50217,13 @@ async def tienda_stripe_webhook(request: Request):
     if not ped:
         return {"ok": True, "pedido_no_encontrado": True}
     cobrado = int(ses.get("amount_total") or 0)
-    esperado = int(round(float(ped.get("total") or 0) * 100)) - int(ped.get("descuento_cent") or 0)
+    # NUNCA NEGATIVO. Un cupon que descuenta mas de lo que vale el pedido deja
+    # el cobro en 0 en Stripe; con `esperado` en negativo, `cobrado != esperado`
+    # y una venta legitima se quedaria marcada de descuadre, sin enviar y en
+    # silencio. Hoy no puede pasar -10 EUR contra prendas de 30 para arriba-,
+    # pero es exactamente la trampa que espera al dia que se suba el importe.
+    esperado = max(0, int(round(float(ped.get("total") or 0) * 100))
+                   - int(ped.get("descuento_cent") or 0))
     if cobrado != esperado:
         logger.error("Stripe cobro %s y el pedido %s vale %s", cobrado, pedido_id, esperado)
         await db[_TCOL_PEDIDOS].update_one(
@@ -50253,14 +50259,31 @@ de verdad a gente real la toma una persona mirando la pantalla, no un script.
 funcionando sin tocar a nadie más.
 """
 
+# EL CUPON DE LA CAMPANA: 10 EUR, 4 horas y TRES usos, uno por cada prenda de
+# la tienda (hoodie, cortavientos y gorra).
+# Nació con `max_redemptions=1` y eso se contradecía con el propio escaparate
+# (19-09-2026): al entrar con el cupón, las TRES tarjetas enseñaban su precio
+# tachado, pero el descuento moría en la primera compra y las otras dos volvían
+# a precio entero en la pantalla de pago. La tienda prometia tres descuentos y
+# solo existía uno.
+# El número NO debe subir solo con el catálogo: cada uso son 10 EUR regalados a
+# la misma persona, y un cupón personal se puede reenviar. Si algún día hay una
+# cuarta prenda, esto se decide a mano — `test_campana_cupon.py` lo sujeta
+# contando las tarjetas de la tienda.
+_CAMPANA_CUPON_EUR = 10.0
+_CAMPANA_CUPON_HORAS = 4
+_CAMPANA_CUPON_USOS = 3
 
-async def _stripe_crear_cupon(importe_eur: float, horas: int, un_solo_uso: bool = False) -> Optional[dict]:
+
+async def _stripe_crear_cupon(importe_eur: float, horas: int, usos: int = 0) -> Optional[dict]:
     """Cupon Stripe de importe fijo con caducidad REAL (`redeem_by`): la
     valida Stripe al cobrar, no nosotros — así no hay que guardar ni comprobar
     caducidad en ningún sitio nuestro, y no hay forma de que quede viva de más
     por un fallo nuestro.
-    `un_solo_uso=True` pone `max_redemptions=1`: para un cupón PERSONAL (uno
-    por candidato), no para el compartido de una prueba suelta."""
+    `usos` es el `max_redemptions`: cuántas COMPRAS admite ese cupón PERSONAL
+    (uno por candidato); 0 deja el cupón sin límite, que es lo que quiere una
+    prueba suelta compartida. Stripe descuenta el importe una vez por PEDIDO,
+    nunca por unidad, así que cada uso son `importe_eur` regalados."""
     if not _stripe_encendido():
         return None
     expira = datetime.now(timezone.utc) + timedelta(hours=horas)
@@ -50271,8 +50294,8 @@ async def _stripe_crear_cupon(importe_eur: float, horas: int, un_solo_uso: bool 
         ("redeem_by", str(int(expira.timestamp()))),
         ("name", f"Bienvenida {importe_eur:.0f}€"),
     ]
-    if un_solo_uso:
-        datos.append(("max_redemptions", "1"))
+    if usos > 0:
+        datos.append(("max_redemptions", str(usos)))
     import httpx as _httpx
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
@@ -50485,14 +50508,16 @@ def _candidatos_campana_html_cupon(nombre: str, url_tienda: str, expira_en: str)
             timezone(timedelta(hours=2))).strftime("%H:%M")
     except Exception:                                          # noqa: BLE001
         hora_local = ""
-    preheader = "🎁 10 € de regalo en nuestra tienda — caduca en 4 horas"
+    preheader = (f"🎁 10 € en cada prenda de nuestra tienda — caduca en "
+                 f"{_CAMPANA_CUPON_HORAS} horas")
     return f"""
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
     <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
       <p>{saludo}</p>
       <p>Ya te postulaste con nosotros hace un tiempo — gracias por eso. Como
-      agradecimiento, te regalamos <strong>10&nbsp;EUR de descuento</strong> en
-      nuestra tienda, pero solo durante las próximas <strong>4 horas</strong>
+      agradecimiento, te regalamos <strong>10&nbsp;EUR de descuento en cada una
+      de las tres prendas</strong> de nuestra tienda, pero solo durante las
+      próximas <strong>{_CAMPANA_CUPON_HORAS} horas</strong>
       {f'(hasta las {hora_local})' if hora_local else ''}. Pasado ese plazo el
       cupón se desactiva solo.</p>
       <p style="text-align:center;margin:28px 0">
@@ -50551,13 +50576,16 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
         destinatarios = await db.candidatos.find(
             {"email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "nombre": 1}).to_list(2000)
 
-    # Un cupón PERSONAL por destinatario, de un solo uso (max_redemptions=1) y
-    # con su propio reloj de 4h desde que se genera — no uno compartido que
-    # cualquiera pudiera reenviar a otra persona antes de gastarlo.
+    # Un cupón PERSONAL por destinatario, con su propio reloj de 4h desde que se
+    # genera — no uno compartido que cualquiera pudiera reenviar a otra persona
+    # antes de gastarlo. Admite tres usos (`_CAMPANA_CUPON_USOS`): uno por
+    # prenda, para que quien se lleve el hoodie conserve el descuento en el
+    # cortavientos y en la gorra.
     enviados, fallidos, sin_cupon = 0, 0, 0
     ultima_expira = None
     for d in destinatarios:
-        cupon = await _stripe_crear_cupon(10.0, 4, un_solo_uso=True)
+        cupon = await _stripe_crear_cupon(
+            _CAMPANA_CUPON_EUR, _CAMPANA_CUPON_HORAS, usos=_CAMPANA_CUPON_USOS)
         if not cupon:
             sin_cupon += 1
             fallidos += 1
