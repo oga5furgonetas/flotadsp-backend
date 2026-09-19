@@ -43705,7 +43705,10 @@ async def whc_estado(_=Depends(require_admin)):
                                                 sort=[("week", -1)])
         ult_p = await db.whc_planes.find_one({"center": nave}, {"_id": 0},
                                              sort=[("week", -1)])
-        ult = max((x for x in (ult_a, ult_p) if x),
+        cand = [x for x in (ult_a, ult_p) if x]
+        # La de ESTA semana si la hay en alguna de las dos: un plan pegado de la
+        # semana que viene (semana 09-20 un 19-09) no puede tapar el que si entro.
+        ult = max([x for x in cand if x.get("week") == sun] or cand,
                   key=lambda x: (x.get("week") or "", x.get("updated_at") or ""), default=None)
         fuera.append({
             "centro": nave,
