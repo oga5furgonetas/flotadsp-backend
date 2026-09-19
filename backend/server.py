@@ -5841,6 +5841,9 @@ async def admin_salud(_: dict = Depends(require_superadmin)):
     # El semaforo no es adorno: sin tope se le mandan 1.382 comandos de golpe al
     # mismo pool de conexiones y se pasa de un problema a otro. Con 24 sale una
     # cola corta y el resto del backend sigue respondiendo mientras tanto.
+    # Cuantas bases llevan desglose por coleccion. Ocho cubre de sobra a las que
+    # ocupan algo: la novena de hoy pesa menos que el margen de error.
+    _SALUD_DESGLOSE = 8
     _sem = asyncio.Semaphore(24)
 
     async def _stats_col(nombre, col):
@@ -5854,31 +5857,43 @@ async def admin_salud(_: dict = Depends(require_superadmin)):
                 "docs": int(cs.get("count") or 0)}
 
     async def _stats_base(nombre):
+        """Lo barato: UNA llamada por base. El desglose por coleccion se pide
+        despues y solo donde se va a mirar."""
         async with _sem:
             try:
                 st = await client[nombre].command("dbStats", scale=1024 * 1024)
             except Exception:
                 return None
-            try:
-                cols = await client[nombre].list_collection_names()
-            except Exception:
-                cols = []
-        # Las colecciones más pesadas de esa base, que es donde se mira primero.
-        gordas = [g for g in await asyncio.gather(*[_stats_col(nombre, c) for c in cols]) if g]
-        gordas.sort(key=lambda c: (-c["mb"], c["coleccion"]))  # gotcha 62
         return {"base": nombre,
                 "datos_mb": round(float(st.get("dataSize") or 0), 1),
                 "indices_mb": round(float(st.get("indexSize") or 0), 1),
                 "colecciones": int(st.get("collections") or 0),
-                "top": gordas[:6]}
+                "top": []}
 
-    # `gather` conserva el orden de `nombres`, asi que la respuesta sale igual
-    # que antes; una base que falle se salta, exactamente como hacia el `continue`.
-    for b in await asyncio.gather(*[_stats_base(n) for n in nombres]):
-        if not b:
-            continue
+    async def _desglose(b):
+        """Las colecciones mas pesadas de UNA base."""
+        async with _sem:
+            try:
+                cols = await client[b["base"]].list_collection_names()
+            except Exception:
+                return
+        gordas = [g for g in await asyncio.gather(*[_stats_col(b["base"], c) for c in cols]) if g]
+        gordas.sort(key=lambda c: (-c["mb"], c["coleccion"]))  # gotcha 62
+        b["top"] = gordas[:6]
+
+    bases = [b for b in await asyncio.gather(*[_stats_base(n) for n in nombres]) if b]
+
+    # EL DESGLOSE SOLO DE LAS QUE PESAN, y por eso esto ya no tarda medio minuto.
+    # Pedir un `collStats` por CADA coleccion de CADA base eran 1.382 idas y
+    # vueltas cuando se midio el 05-09-2026 (9,8 s) y son **2.026 hoy**: 59
+    # bases y 1.908 colecciones, porque cada cliente nuevo suma la suya. Medido
+    # el 19-09-2026, la pantalla tardaba de 5 s a 43 s segun como anduviera
+    # Atlas. Y el desglose de una base de 2 MB no lo mira nadie: lo que se mira
+    # es que ocupa el espacio, que son las cuatro o cinco mas gordas.
+    bases.sort(key=lambda b: (-(b["datos_mb"] + b["indices_mb"]), b["base"]))  # gotcha 62
+    await asyncio.gather(*[_desglose(b) for b in bases[:_SALUD_DESGLOSE]])
+    for b in bases:
         total_mb += b["datos_mb"] + b["indices_mb"]
-        bases.append(b)
 
     total_mb = round(total_mb, 1)
     libre_mb = round(LIMITE_ATLAS_MB - total_mb, 1)
@@ -27854,8 +27869,15 @@ async def _drivers_sin_transporter(dias: int = 30) -> dict:
             if n and t:
                 porNombre.setdefault(_tr_nombre(n), set()).add(t)
 
+    # QUIEN ESTA DE BAJA NO HAY QUE EMPAREJARLO. Esta lista existe para que la
+    # oficina complete fichas, y sin esta linea contaba tambien a los que ya no
+    # trabajan: medido el 19-09-2026, decia 88 y los que importan eran 40 —los
+    # otros 48 estaban de baja—. Es la regla del gotcha 13 (una furgoneta de
+    # baja no cuenta en nada) aplicada a personas: una lista de tareas con mas
+    # de la mitad de ruido deja de mirarse, y entonces los 40 de verdad se
+    # quedan sin emparejar igual.
     fichas = await db.drivers.find(
-        {"status": {"$nin": ["deleted", "baja"]}},
+        {"status": {"$nin": ["deleted", "baja"]}, "active": {"$ne": False}},
         {"_id": 0, "id": 1, "name": 1, "center": 1, "transporter_id": 1,
          "driver_id": 1, "email": 1}).to_list(2000)
     # EL ID VIVE EN DOS CAMPOS (gotcha 79): una ficha con el ID solo en

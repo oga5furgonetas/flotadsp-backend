@@ -167,3 +167,20 @@ def test_el_relleno_automatico_no_da_dos_ids_a_una_ficha():
     `driver_id` le proponia otro y quedaba con dos."""
     src = _fuente("_drivers_sin_transporter")
     assert 'f.get("driver_id")' in src
+
+def test_la_lista_de_emparejar_no_cuenta_a_los_que_ya_no_trabajan():
+    """Medido en produccion el 19-09-2026: la pantalla decia **88 sin
+    emparejar** y solo **40** estaban en activo — los otros 48 eran gente DADA
+    DE BAJA. Es la regla del gotcha 13 (una furgoneta de baja no cuenta en
+    nada) aplicada a personas, y aqui importa porque esto es una lista de
+    TAREAS: con mas de la mitad de ruido se deja de mirar, y entonces los 40 de
+    verdad se quedan sin emparejar igual.
+
+    Su hermano `sin-centro` ya lo hacia bien; la asimetria entre los dos era la
+    causa."""
+    src = _fuente("_drivers_sin_transporter")
+    assert '"active": {"$ne": False}' in src, (
+        "la lista de emparejar vuelve a contar a los conductores dados de baja")
+    hermano = _fuente("_drivers_sin_centro")
+    assert '"active": {"$ne": False}' in hermano, (
+        "y el hermano `sin-centro` tambien ha dejado de filtrarlos")
