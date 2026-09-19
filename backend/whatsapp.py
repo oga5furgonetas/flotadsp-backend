@@ -247,7 +247,8 @@ PLANTILLAS_BASE = [
         "components": [{
             "type": "BODY",
             "text": ("Hola, ¿cómo va la {{1}}? Lleva {{2}} días sin novedades. "
-                     "Con un toque aquí nos decís el estado y así no os llamamos: {{3}}"),
+                     "Con un toque aquí nos decís el estado y así no os llamamos: {{3}}. "
+                     "Gracias."),
             "example": {"body_text": [["1234 ABC", "5", "https://flotadsp.com/taller/abc123"]]},
         }],
     },
@@ -257,8 +258,9 @@ PLANTILLAS_BASE = [
         "category": "UTILITY",
         "components": [{
             "type": "BODY",
-            "text": ("Resumen {{1}}: {{2}} entregados, {{3}} golpes nuevos, "
-                     "checklist {{4}}."),
+            "text": ("Resumen del día en {{1}}: se entregaron {{2}} paquetes, "
+                     "se registraron {{3}} golpes nuevos en las furgonetas, "
+                     "y el checklist se completó en {{4}} de los vehículos."),
             "example": {"body_text": [["OGA5 28/08", "3.412", "2", "38 de 41"]]},
         }],
     },
