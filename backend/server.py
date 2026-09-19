@@ -19530,8 +19530,13 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
     # Cabe de sobra: `cortex_packages` caduca a los 90 dias.
     desde = hoy[:8] + "01"
     if not tids:
-        return {"sin_transporter": True, "centro": center, "hoy": None, "dias": [],
-                "mes": None, "semana": None}
+        # `centro` ES SIEMPRE UN OBJETO O None, nunca el codigo suelto. Aqui
+        # devolvia el texto del centro, y el portal —que pinta el bloque con
+        # `datos?.centro &&`— pasaba el guard y reventaba en
+        # `centro.entregados`: pantalla en blanco para el conductor que aun no
+        # tiene emparejado su id de Cortex. Seis veces el 18-09-2026.
+        return {"sin_transporter": True, "centro": None, "centro_codigo": center,
+                "hoy": None, "dias": [], "mes": None, "semana": None}
 
     # ── HOY, en vivo ────────────────────────────────────────────────────────
     total = entregados = pendientes = reintentos = 0
@@ -41037,6 +41042,13 @@ async def plantilla_compartida_celda(draft_id: str, body: dict = Body(...), admi
         doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
         if not doc:
             raise HTTPException(404, "Esa plantilla ya no existe")
+        # ESCRIBIR EN LA CELDA DE LA RUTA CAMBIA LA PROPIA REFERENCIA. Si la
+        # fila ya tiene el valor que se pedia poner, el cambio esta hecho: un
+        # 409 aqui manda recargar por algo que ya esta bien, y en la plantilla
+        # de la manana eso borraba lo que se estaba escribiendo.
+        _filas = (doc.get("state") or {}).get("rows") or []
+        if campo == "ruta" and fila < len(_filas) and (_filas[fila] or {}).get("ruta") == valor:
+            return _plantilla_shared_payload(doc)
         # La fila se movio: el cliente se recarga y vuelve a intentarlo.
         raise HTTPException(409, detail={"message": "Las filas han cambiado, se recarga la plantilla.",
                                          "draft": _plantilla_shared_payload(doc)})

@@ -167,7 +167,7 @@ export default function MisNumeros({ onBack }) {
           </div>
         )}
 
-        {datos?.centro && (
+        {datos?.centro?.entregados != null && (
           <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 px-4 py-3.5">
             <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-[.16em] text-dark-500">
               Entre todos, en {datos.centro.codigo}

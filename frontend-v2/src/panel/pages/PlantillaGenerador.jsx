@@ -203,9 +203,21 @@ export default function PlantillaGenerador() {
   const [hideNY, setHideNY] = useState(false)
   useEffect(() => { setHideNY((center || '').toUpperCase() === 'OGA5') }, [center])
 
+  // La ruta que el SERVIDOR tiene en cada fila, que es con lo que se guarda
+  // una celda (ver dentro de `applySharedDraft`).
+  const rutasServidor = useRef([])
+
   function applySharedDraft(draft) {
     const s = draft?.state
     if (!s?.rows) return
+    // La ruta que tiene EL SERVIDOR en cada fila. Es la referencia con la que
+    // se guarda una celda, y no puede salir de lo que hay en pantalla: al
+    // escribir en la celda de la RUTA, lo de pantalla ya es el texto nuevo y el
+    // servidor sigue con el viejo, asi que no casaban y cada tecla devolvia un
+    // 409 «las filas han cambiado». Resultado: la celda de la ruta no se
+    // guardaba NUNCA. 76 veces entre el 02 y el 19-09-2026, casi todas de Mery
+    // llenando la plantilla de la manana.
+    rutasServidor.current = s.rows.map((r) => r?.ruta)
     // La celda que se está escribiendo AHORA no se toca: su versión del
     // servidor llega medio segundo tarde y borraría las últimas letras.
     // Se lee con la forma funcional de `setData` A PROPÓSITO: esta función la
@@ -457,7 +469,7 @@ export default function PlantillaGenerador() {
 
   function editCell(rowIdx, field, value) {
     if (field !== '_paste_hours') {
-      guardarCelda(rowIdx, field, value, data?.rows?.[rowIdx]?.ruta)
+      guardarCelda(rowIdx, field, value, rutasServidor.current[rowIdx] ?? data?.rows?.[rowIdx]?.ruta)
       // Mientras se escribe en esta celda, el refresco de los otros equipos no
       // la toca: su version llega medio segundo tarde y borraria las ultimas
       // letras. Se suelta sola tres segundos despues de la ultima tecla.

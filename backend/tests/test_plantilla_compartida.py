@@ -98,6 +98,33 @@ def test_la_celda_comprueba_la_ruta_de_su_fila():
     assert "ruta_ref" in c and "409" in c
 
 
+def test_escribir_en_la_celda_de_la_ruta_no_se_invalida_a_si_misma():
+    """LA REFERENCIA NO PUEDE SALIR DE LO QUE SE ESTA ESCRIBIENDO.
+
+    Cada celda viaja con `ruta_ref` -la ruta de su fila- para detectar que
+    alguien anadio o quito filas. Pero al escribir en la celda de la RUTA, lo
+    que hay en pantalla YA es el texto nuevo y el servidor sigue con el viejo:
+    no casaban, y cada guardado devolvia 409 «las filas han cambiado». O sea
+    que la celda de la ruta NO SE GUARDABA NUNCA, y encima forzaba una recarga
+    que borraba lo tecleado. 76 veces entre el 02 y el 19-09-2026, 77 de ellas
+    de Mery llenando la plantilla de la manana.
+
+    La referencia sale ahora de lo ultimo que mando el SERVIDOR
+    (`rutasServidor`), y el servidor ademas no pide recargar si la fila ya
+    tiene el valor que se queria poner: reescribir lo mismo no es un conflicto.
+    """
+    jsx = io.open(os.path.join(RAIZ, "..", "frontend-v2", "src", "panel",
+                               "pages", "PlantillaGenerador.jsx"), encoding="utf-8").read()
+    assert "rutasServidor.current = s.rows.map" in jsx, (
+        "el cliente ya no recuerda la ruta que tiene el servidor en cada fila")
+    assert "guardarCelda(rowIdx, field, value, rutasServidor.current[rowIdx]" in jsx, (
+        "la referencia vuelve a salir de lo que hay en pantalla")
+
+    cuerpo = _cuerpo("plantilla_compartida_celda")
+    assert 'campo == "ruta"' in cuerpo, (
+        "el servidor vuelve a pedir recargar al reescribir la misma ruta")
+
+
 def test_pegar_horas_solo_toca_las_horas():
     c = _cuerpo("plantilla_compartida_horas", con_docstring=False)
     for campo in ("conductor", "movil", "furgo", "observaciones"):
