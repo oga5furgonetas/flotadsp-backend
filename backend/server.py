@@ -1092,6 +1092,7 @@ MODULOS_PANEL = [
     {"clave": "aparcamiento", "nombre": "Aparcamiento", "grupo": "Flota", "que": "Donde queda cada furgoneta"},
     {"clave": "vencimientos", "nombre": "Vencimientos", "grupo": "Flota", "que": "ITV, renting y alquileres"},
     {"clave": "importaciones", "nombre": "Importaciones", "grupo": "Flota", "que": "Subir flota y conductores de Excel"},
+    {"clave": "chat", "nombre": "Chat interno", "grupo": "Equipo", "que": "Mensajes y documentos entre la gente de la empresa"},
     {"clave": "conductores", "nombre": "Conductores", "grupo": "Equipo", "que": "Fichas y accesos al portal"},
     {"clave": "empleo", "nombre": "Empleo", "grupo": "Equipo", "que": "Ofertas y candidatos"},
     {"clave": "incorporaciones", "nombre": "Incorporaciones", "grupo": "Equipo", "que": "Altas de gente nueva"},
@@ -1109,7 +1110,7 @@ _MODULOS_CLAVES = [m["clave"] for m in MODULOS_PANEL]
 # afinando con la flota de Dani.
 MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision",
                     "inspecciones", "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
-                    "conductores", "configuracion"]
+                    "conductores", "chat", "configuracion"]
 # Sin estas no se puede ni empezar: no se pueden quitar.
 _MODULOS_FIJOS = ("dashboard", "configuracion")
 
@@ -14680,6 +14681,82 @@ async def mensajes_enviar(otro_id: str, data: dict = Body(...),
         try:
             asyncio.create_task(send_web_push_to_users(
                 [otro_id], f"💬 {doc['de_nombre']}", texto[:120], "/panel/chat"))
+        except Exception as e:                                   # noqa: BLE001
+            logger.debug(f"push privado: {e}")
+    return {"ok": True, "mensaje": doc}
+
+
+# Lo que se puede mandar por el chat. Lista BLANCA por extension y el tipo lo
+# pone el servidor: el que diga el navegador no vale, y un .html o un .svg
+# servido desde el dominio del almacen ejecutaria codigo de quien lo subio.
+_CHAT_ADJUNTOS = {
+    "pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
+    "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "csv": "text/csv", "txt": "text/plain", "zip": "application/zip",
+}
+_CHAT_ADJUNTO_MAX = 15 * 1024 * 1024
+
+
+@api_router.post("/mensajes/con/{otro_id}/archivo")
+async def mensajes_enviar_archivo(otro_id: str, file: UploadFile = File(...),
+                                  texto: str = Form(default=""),
+                                  user: dict = Depends(require_admin)):
+    """Manda un documento (o una foto) a una persona de la empresa.
+
+    Va en la misma conversacion privada que el texto, como un mensaje mas con
+    `adjunto`. Solo lo ve quien esta en esa conversacion: la URL del almacen lleva
+    un identificador al azar y ademas no se devuelve a nadie mas.
+    """
+    yo = user.get("sub")
+    if otro_id == yo:
+        raise HTTPException(400, "No puedes escribirte a ti mismo")
+    otro = await global_db.admin_users.find_one(
+        {"id": otro_id, "org_id": _mensajes_org(user), "disabled": {"$ne": True}},
+        {"_id": 0, "id": 1, "name": 1})
+    if not otro:
+        raise HTTPException(404, "Esa persona no está en tu empresa")
+    nombre = re.sub(r"[\r\n\/]+", "_", (file.filename or "documento")).strip()[:120] or "documento"
+    ext = nombre.rsplit(".", 1)[-1].lower() if "." in nombre else ""
+    if ext not in _CHAT_ADJUNTOS:
+        raise HTTPException(400, "Ese tipo de archivo no se puede enviar (PDF, imágenes, Word, Excel, PowerPoint, CSV, TXT o ZIP)")
+    contenido = await file.read(_CHAT_ADJUNTO_MAX + 1)
+    if not contenido:
+        raise HTTPException(400, "El archivo está vacío")
+    if len(contenido) > _CHAT_ADJUNTO_MAX:
+        raise HTTPException(413, "Archivo demasiado grande (máximo 15 MB)")
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(502, "El almacenamiento de archivos no está configurado")
+    clave = "chat/%s/%s.%s" % (_mensajes_org(user), uuid.uuid4().hex, ext)
+    tipo = _CHAT_ADJUNTOS[ext]
+    es_imagen = tipo.startswith("image/")
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            _executor, lambda: s3.put_object(
+                Bucket=R2_BUCKET, Key=clave, Body=contenido, ContentType=tipo,
+                # Lo que no es imagen se descarga en vez de abrirse en el dominio.
+                ContentDisposition=("inline" if es_imagen else "attachment")))
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("Chat: no se pudo subir %s: %s", clave, e)
+        raise HTTPException(502, "No se pudo guardar el archivo. Inténtalo otra vez")
+    r2_public = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+    doc = {"id": str(uuid.uuid4()), "conv": _conv_id(yo, otro_id),
+           "de": yo, "de_nombre": user.get("name") or user.get("username") or "—",
+           "para": otro_id, "texto": _texto_cuerpo(texto, 500),
+           "adjunto": {"nombre": nombre, "url": "%s/%s" % (r2_public, clave) if r2_public else clave,
+                       "tipo": tipo, "tam": len(contenido), "imagen": es_imagen},
+           "creado_en": datetime.now(timezone.utc).isoformat(), "leido_en": None}
+    await db.chat_dm.insert_one(dict(doc))
+    if _push_enabled:
+        try:
+            asyncio.create_task(send_web_push_to_users(
+                [otro_id], "💬 %s" % doc["de_nombre"], "📎 %s" % nombre, "/panel/chat"))
         except Exception as e:                                   # noqa: BLE001
             logger.debug(f"push privado: {e}")
     return {"ok": True, "mensaje": doc}
@@ -37279,6 +37356,11 @@ def _hm_desde_medianoche(minutos) -> str:
     return "%d:%02d%s" % (h12, mm, ampm)
 
 
+def _sat_de(sun: str) -> str:
+    """El sabado de la semana que empieza el domingo `sun` (semana de Amazon)."""
+    return (datetime.strptime(sun, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d")
+
+
 def _iso_a_ms(iso) -> int:
     """Un instante ISO 8601 a milisegundos epoch; 0 si no se puede leer."""
     try:
@@ -37332,7 +37414,8 @@ def _whc_reservas(c: dict) -> list:
     return fuera
 
 
-def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = None) -> dict:
+def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = None,
+                    desde: str = None, hasta: str = None) -> dict:
     """De las reservas crudas a lo que se puede AFIRMAR y lo que solo se PROYECTA.
 
     El 19-09-2026 la pantalla decia «18 ya pasados» en OGA5 y solo 2 lo eran:
@@ -37351,14 +37434,25 @@ def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = N
       · PENDIENTE un dia que aun no ha llegado, o la hora de hoy que aun no paso.
                   Un dia PASADO sin entrada fichada NO es pendiente (no vendra):
                   contarlo inflaba la proyeccion de quien falto o libraba.
+
+    LA SEMANA VA DE DOMINGO A SABADO (la de Amazon). `desde`/`hasta` acotan las
+    reservas: lo del domingo que viene es semana NUEVA y no cuenta aqui, ni como
+    hecho ni como pendiente, aunque el roster lo trajera.
+
+    Un bloque con entrada y sin salida sigue EN CURSO mientras su ventana no ha
+    terminado, aunque haya cambiado el dia (un turno que cruza la medianoche);
+    solo pasa a «sin salida» cuando su hora de fin ya paso de largo.
     """
     if ahora_ms is None:
         ahora_ms = int(time.time() * 1000)
     bloques = []
     cerrado = hecho_curso = plan_curso = sin_salida = pend = 0
     n_sin_salida = n_pend = n_sin_fichar = 0
+    dias_sin_salida = []
     for r in sorted(reservas or [], key=lambda x: (x.get("dia") or "", x.get("ini") or 0)):
         dia, dur = r.get("dia") or "", max(0, int(r.get("dur") or 0))
+        if (desde and dia < desde) or (hasta and dia > hasta):
+            continue
         ci, co, ini = r.get("ci"), r.get("co"), r.get("ini")
         base = {"dia": dia, "inicio": _hm_desde_medianoche(ini),
                 "tipo": r.get("tipo") or ""}
@@ -37368,7 +37462,8 @@ def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = N
             bloques.append({**base, "fin": _hm_desde_medianoche((ini or 0) + minutos),
                             "minutos": minutos, "estimado": False,
                             "en_curso": False, "sin_salida": False})
-        elif ci and dia >= hoy:
+        elif ci and (dia >= hoy or ahora_ms < max(ci, r.get("ini_ep") or 0)
+                     + (dur + 120) * 60000):
             hecho = max(0, int((captura_ms - ci) / 60000))
             hecho_curso += hecho
             plan_curso += max(dur, hecho)
@@ -37377,6 +37472,7 @@ def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = N
         elif ci:
             sin_salida += dur
             n_sin_salida += 1
+            dias_sin_salida.append(dia)
             # `estimado`: la duracion es la planificada, no la fichada, y por eso
             # no puede acusar de una jornada larga.
             bloques.append({**base, "fin": "", "minutos": dur, "estimado": True,
@@ -37400,6 +37496,7 @@ def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = N
         "en_curso_min": hecho_curso,
         "sin_salida_min": sin_salida,
         "sin_salida_n": n_sin_salida,
+        "sin_salida_dias": dias_sin_salida,
         "sin_fichar_n": n_sin_fichar,
         # Lo que aun tiene por delante segun el cuadrante.
         "planificado_restante": pend + max(0, plan_curso - hecho_curso),
@@ -43620,7 +43717,8 @@ async def whc_semana(center: str, _=Depends(require_admin)):
         base = {k: v for k, v in c.items()
                 if k not in ("reservas", "bloques", "trabajado", "planificado_restante",
                              "bloques_restantes", "proyeccion")}
-        gente.append({**base, **_whc_clasificar(reservas, hoy, captura_ms, ahora_ms)})
+        gente.append({**base, **_whc_clasificar(reservas, hoy, captura_ms, ahora_ms,
+                                                sun, _sat_de(sun))})
     ev = _whc_evaluar(gente, limite, bloque, None)
     for c in ev:
         proy = c.get("proyeccion") or 0

@@ -156,3 +156,22 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(1 if main() else 0)
+
+
+def test_los_documentos_del_chat_van_por_lista_blanca_y_a_alguien_de_la_empresa():
+    """Un .html o un .svg servido desde el dominio del almacen ejecutaria codigo
+    de quien lo sube: el tipo lo pone el servidor y solo de una lista blanca."""
+    _ARBOL = ast.parse(_TEXTO)
+    src = next(ast.get_source_segment(_TEXTO, n) for n in ast.walk(_ARBOL)
+               if isinstance(n, ast.AsyncFunctionDef) and n.name == "mensajes_enviar_archivo")
+    assert "_mensajes_org(user)" in src, "el destinatario tiene que ser de tu empresa"
+    assert '"disabled": {"$ne": True}' in src
+    assert "_CHAT_ADJUNTOS[ext]" in src and "if ext not in _CHAT_ADJUNTOS" in src
+    assert "_CHAT_ADJUNTO_MAX" in src
+    # El tipo NO se toma de lo que diga el navegador.
+    assert "file.content_type" not in src
+    tabla = [n for n in ast.walk(_ARBOL) if isinstance(n, ast.Assign)
+             and getattr(n.targets[0], "id", "") == "_CHAT_ADJUNTOS"][0]
+    permitidas = set(ast.literal_eval(tabla.value))
+    assert not permitidas & {"html", "htm", "svg", "js", "exe", "php", "xml"}
+    assert {"pdf", "xlsx", "docx", "png", "jpg"} <= permitidas

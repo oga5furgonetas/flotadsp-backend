@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
-import { Loader2, Send, MessageSquare, CheckSquare, Trash2, Users } from 'lucide-react'
+import { Loader2, Send, MessageSquare, CheckSquare, Trash2, Users, Paperclip, FileText, Download } from 'lucide-react'
 import { getChat, postChat, chatToChecklist, deleteChatMessage,
-         getMensajesGente, getMensajesCon, postMensaje } from '../api'
+         getMensajesGente, getMensajesCon, postMensaje, postMensajeArchivo } from '../api'
 import { getAdmin, isSuperAdmin } from '../auth'
 
 const POLL_MS = 7000
@@ -64,6 +64,8 @@ export default function Chat() {
   const [con, setCon] = useState(null)
   const lastIdRef = useRef(null)
   const bottomRef = useRef(null)
+  const ficheroRef = useRef(null)
+  const [params, setParams] = useSearchParams()
   const noCenter = center === 'Todos'
 
   function fmtTime(s) {
@@ -81,6 +83,17 @@ export default function Chat() {
   }, [])
 
   useEffect(() => { cargarGente() }, [cargarGente])
+  /* `?con=<id>` abre esa conversación: es lo que hace el botón de «quién está
+     conectado» de la cabecera. */
+  useEffect(() => {
+    const id = params.get('con')
+    if (!id || id === conId) return
+    const p = gente.find((x) => x.id === id)
+    if (!p) return
+    setConId(p.id); setCon({ id: p.id, nombre: p.nombre, foto: p.foto })
+    setGente((g) => g.map((x) => x.id === p.id ? { ...x, sin_leer: 0 } : x))
+    setParams({}, { replace: true })
+  }, [params, gente, conId, setParams])
   useEffect(() => {
     const iv = setInterval(cargarGente, POLL_GENTE_MS)
     return () => clearInterval(iv)
@@ -92,7 +105,7 @@ export default function Chat() {
         const r = await getMensajesCon(conId)
         setMsgs((r.data?.mensajes || []).map((m) => ({
           id: m.id, text: m.texto, author_id: m.de, author_name: m.de_nombre,
-          created_at: m.creado_en, privado: true,
+          created_at: m.creado_en, privado: true, adjunto: m.adjunto || null,
         })))
         setCon(r.data?.con || null)
         setErr('')
@@ -141,6 +154,23 @@ export default function Chat() {
       setText('')
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo enviar.')
+    }
+    setSending(false)
+  }
+
+  async function enviarArchivo(e) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f || !conId || sending) return
+    setSending(true); setErr('')
+    try {
+      const r = await postMensajeArchivo(conId, f, text.trim())
+      const m = r.data.mensaje
+      setMsgs((arr) => [...arr, { id: m.id, text: m.texto, author_id: m.de, author_name: m.de_nombre,
+                                  created_at: m.creado_en, privado: true, adjunto: m.adjunto }])
+      setText('')
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudo enviar el archivo.')
     }
     setSending(false)
   }
@@ -269,7 +299,27 @@ export default function Chat() {
                       {!mine && (
                         <div className="mb-0.5 text-[11px] font-semibold text-brand-300">{m.author_name}</div>
                       )}
-                      <div className="whitespace-pre-wrap break-words">{m.text}</div>
+                      {m.adjunto && (
+                        m.adjunto.imagen ? (
+                          <a href={m.adjunto.url} target="_blank" rel="noreferrer" className="mb-1 block">
+                            <img src={m.adjunto.url} alt={m.adjunto.nombre}
+                              className="max-h-56 max-w-full rounded-lg object-cover" />
+                          </a>
+                        ) : (
+                          <a href={m.adjunto.url} target="_blank" rel="noreferrer" download={m.adjunto.nombre}
+                            className="mb-1 flex items-center gap-2 rounded-lg border border-white/10 bg-black/10 px-2.5 py-2 hover:bg-black/20">
+                            <FileText size={18} className="shrink-0 text-brand-300" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12.5px] font-medium">{m.adjunto.nombre}</span>
+                              <span className="block text-[10px] text-dark-400">
+                                {m.adjunto.tam >= 1048576 ? `${(m.adjunto.tam / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(m.adjunto.tam / 1024))} KB`}
+                              </span>
+                            </span>
+                            <Download size={14} className="shrink-0 text-dark-400" />
+                          </a>
+                        )
+                      )}
+                      {m.text && <div className="whitespace-pre-wrap break-words">{m.text}</div>}
                       <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-dark-400">
                         {m.pinned_to_checklist && (
                           <span className="flex items-center gap-0.5 text-emerald-400">
@@ -303,6 +353,18 @@ export default function Chat() {
         </div>
 
         <form onSubmit={send} className="mt-3 flex gap-2">
+          {/* Documentos y fotos: solo en las conversaciones privadas. */}
+          {conId && (
+            <>
+              <input ref={ficheroRef} type="file" className="hidden" onChange={enviarArchivo}
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.zip" />
+              <button type="button" onClick={() => ficheroRef.current?.click()} disabled={sending}
+                title="Enviar un documento o una foto (máx. 15 MB)"
+                className="flex items-center rounded-lg border border-dark-700 px-3 text-dark-300 hover:text-dark-100 disabled:opacity-50">
+                <Paperclip size={16} />
+              </button>
+            </>
+          )}
           <input value={text} onChange={(e) => setText(e.target.value)}
             placeholder={con ? `Escribe a ${con.nombre}…` : t('chat.placeholder')}
             className="input flex-1" maxLength={2000} disabled={salaBloqueada} />

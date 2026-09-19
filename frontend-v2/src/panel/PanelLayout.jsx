@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase, Store, UserCheck, ImagePlus, Loader2, Bell, BellOff,
+  Briefcase, Store, UserCheck, ImagePlus, Loader2, Bell, BellOff, MessageCircle,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma, actualizarMiFoto } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos, contarDnrPendientes, subirFotoAdmin } from './api'
@@ -18,6 +18,7 @@ import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
 import LiveNotifier from './LiveNotifier'
 import AsistenteBurbuja from './AsistenteBurbuja'
 import MenuMovil from './components/MenuMovil'
+import EquipoEnLinea from './components/EquipoEnLinea'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
 import { vigilarVersion } from '../lib/versionApp'
@@ -50,6 +51,8 @@ const AVISOS = {
   // Investigaciones DNR abiertas y a tiempo (ni contestadas ni caducadas):
   // lo que Amazon sigue esperando que se le diga donde se entrego.
   '/panel/informes': ({ dnrPend }) => dnrPend,
+  // Mensajes privados sin leer.
+  '/panel/chat': ({ chatSinLeer }) => chatSinLeer,
 }
 
 const NAV_DEF = [
@@ -72,12 +75,6 @@ const NAV_DEF = [
     { to: '/panel/turnos', labelKey: 'nav.shifts', icon: CalendarCheck },
     { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
     { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
-    /* El chat interno sale del menú: 8 mensajes desde que existe y 0 en los
-       últimos 30 días. No es un fallo, es una respuesta — ese trabajo se hace
-       por WhatsApp. La página y la ruta siguen vivas y se llega por ⌘K, así
-       que no se pierde nada; lo que se quita es una entrada permanente que
-       nadie pulsa. Descomentar si algún día se usa de verdad.
-    { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing }, */
   ]},
   { g: 'nav.g.fleet', gIcon: Truck, iconCls: 'text-emerald-400', iconBg: 'bg-emerald-500/10', items: [
     { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },
@@ -91,6 +88,11 @@ const NAV_DEF = [
     { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
   ]},
   { g: 'nav.g.team', gIcon: Users, iconCls: 'text-violet-400', iconBg: 'bg-violet-500/10', items: [
+    /* El chat estuvo fuera del menú («8 mensajes en 30 días») y volvió el
+       19-09-2026 con lo que le faltaba: mensajes privados a cada persona de la
+       empresa, quién está conectado y envío de documentos. Fuera del menú, todo
+       eso «no se veía» aunque estuviera desplegado. */
+    { to: '/panel/chat', labelKey: 'nav.chat', icon: MessageCircle },
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/empleo', labelKey: 'nav.empleo', icon: Briefcase },
     /* Va detras de Empleo porque es el paso siguiente: primero se apunta
@@ -436,6 +438,7 @@ export default function PanelLayout() {
   const [peticionesPend, setPeticionesPend] = useState(0)
   const [candidatosNuevos, setCandidatosNuevos] = useState(0)
   const [dnrPend, setDnrPend] = useState(0)
+  const [chatSinLeer, setChatSinLeer] = useState(0)
   useEffect(() => {
     if (!isAuthed()) return
     let vivo = true
@@ -548,7 +551,7 @@ export default function PanelLayout() {
       ...it, label: t(it.labelKey),
       // El aviso se cuelga aqui, del sitio donde ya se traduce el menu, para
       // que cualquier entrada futura solo tenga que anadir su clave a AVISOS.
-      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend, candidatosNuevos, dnrPend }) : 0,
+      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend, candidatosNuevos, dnrPend, chatSinLeer }) : 0,
     })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)
@@ -853,6 +856,8 @@ export default function PanelLayout() {
               ))
             )}
           </div>
+
+          {flatItems.some((it) => it.to === '/panel/chat') && <EquipoEnLinea onSinLeer={setChatSinLeer} />}
 
           <span className="flex-none">
           <MenuUsuario admin={admin} showAdmin={showAdmin} lang={lang} setLang={setLang}

@@ -595,6 +595,15 @@ function haceCuanto(min) {
   return `hace ${Math.floor(min / (24 * 60))} d`
 }
 
+/* «mié 16» de un AAAA-MM-DD. Compuesta a mano y sin pasar por ISO: una fecha
+   local con toISOString() corre el día en España (gotcha 11). */
+const DIAS_CORTOS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb']
+function diaCorto(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number)
+  if (!y || !m || !d) return String(iso)
+  return `${DIAS_CORTOS[new Date(y, m - 1, d).getDay()]} ${d}`
+}
+
 function HorasDeAmazon({ d, hm }) {
   const [todos, setTodos] = useState(false)
   const r = d.resumen
@@ -667,8 +676,8 @@ function HorasDeAmazon({ d, hm }) {
               <span className="text-dark-300">{hm(c.trabajado)} hechas</span>
               {c.sin_salida_min > 0 && (
                 <span className="text-orange-300"
-                  title="Días con entrada fichada y sin salida: se cuentan por lo planificado, no se afirman.">
-                  +{hm(c.sin_salida_min)} sin salida ({c.sin_salida_n})
+                  title="Días YA PASADOS de esta semana (domingo a sábado) con la entrada fichada y sin salida: se cuentan por lo planificado, no se afirman.">
+                  +{hm(c.sin_salida_min)} sin salida ({(c.sin_salida_dias || []).map(diaCorto).join(', ') || c.sin_salida_n})
                 </span>
               )}
               {c.planificado_restante > 0 && (

@@ -305,3 +305,35 @@ def test_el_estado_de_las_naves_mira_lo_que_entra_de_cortex():
     se miraba el plan PEGADO a mano."""
     src = _fuente("whc_estado")
     assert "_WHC_API_COL" in src and "whc_planes" in src
+
+
+def test_el_domingo_que_viene_es_semana_nueva_y_no_cuenta():
+    """La semana de Amazon va de DOMINGO a SABADO. Un bloque del domingo 20 no
+    es de esta semana (13-19): ni como hecho ni como pendiente."""
+    mapa = {
+        "2026-09-16": [_res("2026-09-16")],           # dentro: pendiente
+        "2026-09-20": [_res("2026-09-20")],           # domingo siguiente: fuera
+        "2026-09-12": [_res("2026-09-12", 9, 540, _ms("2026-09-12", 9), _ms("2026-09-12", 18))],
+    }
+    r = RESERVAS(_persona(mapa)["data"][0])
+    c = CLASIFICAR(r, HOY, AHORA, AHORA, "2026-09-13", "2026-09-19")
+    assert c["planificado_restante"] == 540 and c["bloques_restantes"] == 1
+    assert c["trabajado_cerrado"] == 0, "el sabado anterior se ha colado en esta semana"
+    # Sin acotar, el domingo si entraria: es lo que el limite evita.
+    c2 = CLASIFICAR(r, HOY, AHORA, AHORA)
+    assert c2["planificado_restante"] == 1080
+
+
+def test_un_turno_que_cruza_la_medianoche_sigue_en_curso():
+    """Entro el martes a las 22:00 y a las 00:30 del miercoles sigue en ruta: no
+    es un dia pasado sin salida, es alguien trabajando."""
+    ci = _ms("2026-09-15", 22, 0)
+    mapa = {"2026-09-15": [_res("2026-09-15", 22, 540, ci, None)]}
+    r = RESERVAS(_persona(mapa)["data"][0])
+    ahora = _ms("2026-09-16", 0, 30)
+    c = CLASIFICAR(r, "2026-09-16", ahora, ahora)
+    assert c["sin_salida_min"] == 0 and c["en_curso_min"] == 150
+    # Pero cuando su hora de fin ya paso de largo, si es un dia sin salida.
+    tarde = _ms("2026-09-16", 20, 0)
+    c = CLASIFICAR(r, "2026-09-16", tarde, tarde)
+    assert c["sin_salida_min"] == 540 and c["sin_salida_dias"] == ["2026-09-15"]

@@ -533,6 +533,12 @@ export const getAdminOverview = () => api.get('/admin/overview')
 export const getMensajesGente = () => api.get('/mensajes/gente')
 export const getMensajesCon = (id, since) => api.get(`/mensajes/con/${id}`, { params: { since } })
 export const postMensaje = (id, texto) => api.post(`/mensajes/con/${id}`, { texto })
+export const postMensajeArchivo = (id, file, texto) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (texto) fd.append('texto', texto)
+  return api.post(`/mensajes/con/${encodeURIComponent(id)}/archivo`, fd, { timeout: 120000 })
+}
 
 export const getAnalitica = (dias, seg) => api.get('/admin/analitica', { params: { dias, seg } })
 export const getAdminOrgs = () => api.get('/admin/orgs')
