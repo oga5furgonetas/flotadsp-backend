@@ -152,6 +152,44 @@ def _fuente_de(nombre):
     raise AssertionError(nombre + " ya no existe en server.py")
 
 
+def test_la_campana_se_puede_reanudar_sin_repetirsela_a_nadie():
+    """Resend corta por cuota DIARIA (100 correos al dia en el plan gratuito) y
+    la campana son dos correos por cabeza: el 19-09-2026 salieron 97 personas y
+    se quedaron 127 sin nada. Repetirla tal cual al dia siguiente le manda otra
+    vez los dos correos -y un cupon nuevo- a quien ya los tenia. Con lo enviado
+    apuntado por (tipo, correo), la siguiente vuelta manda SOLO lo que falta."""
+    ent = {}
+    exec(_fuente_de("_campana_pendientes"), ent)
+    ent["_CAMPANA_CORREOS"] = ("cupon", "suscripcion")
+    gente = [{"email": "ana@correo.com", "nombre": "Ana"},
+             {"email": "berto@correo.com", "nombre": "Berto"},
+             {"email": "cris@correo.com", "nombre": "Cris"}]
+
+    # Ana recibio los dos; Berto solo el del cupon (la cuota corto en medio).
+    ya = {"cupon:ana@correo.com", "suscripcion:ana@correo.com", "cupon:berto@correo.com"}
+    quedan = ent["_campana_pendientes"](gente, ya)
+    assert [d["email"] for d in quedan] == ["berto@correo.com", "cris@correo.com"]
+    assert quedan[0]["faltan"] == ["suscripcion"], "a Berto no se le repite el cupon"
+    assert quedan[1]["faltan"] == ["cupon", "suscripcion"]
+    # Sin nada apuntado, la primera vuelta manda los dos a todo el mundo.
+    assert len(ent["_campana_pendientes"](gente, set())) == 3
+    # Y con todo apuntado no queda nadie: no se puede mandar dos veces.
+    todo = {f"{t}:{d['email']}" for d in gente for t in ("cupon", "suscripcion")}
+    assert ent["_campana_pendientes"](gente, todo) == []
+
+
+def test_la_cuota_diaria_agotada_corta_la_campana_en_seco():
+    """Seguir cuando Resend ya dijo que no solo sirve para crear un cupon de
+    Stripe por cabeza que nadie va a recibir: 127 tirados el 19-09-2026."""
+    servidor = _servidor()
+    assert "daily_quota_exceeded" in servidor, (
+        "el remitente ya no reconoce la cuota diaria agotada de Resend")
+    assert "if _email_sin_cuota_hoy():" in servidor, (
+        "la campana ya no mira si la cuota del dia esta agotada")
+    assert "pendientes = len(destinatarios) - n" in servidor, (
+        "la campana ya no apunta cuantos se quedan sin correo")
+
+
 def main():
     """Para el runner que ejecuta ficheros sueltos (run_all.py aguanta las dos
     formas)."""

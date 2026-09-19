@@ -184,7 +184,7 @@ def test_la_app_prepara_el_correo_pero_no_lo_envia():
     hecho: la revisa y la manda una persona. Y abrir el correo no es haberlo
     enviado — se marca aparte, igual que con las ETT."""
     src = _fuente("dnr_responder")
-    assert "_send_resend_email" not in src and "smtp" not in src.lower()
+    assert "_enviar_email" not in src and "smtp" not in src.lower()
     assert "mailto" in src or "_dnr_correo" in src
     marcar = _fuente("dnr_marcar_enviada")
     assert "contestada" in marcar

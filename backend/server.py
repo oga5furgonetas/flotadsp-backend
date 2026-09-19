@@ -6041,49 +6041,125 @@ async def admin_login(data: LoginRequest, request: Request):
 # RECUPERACIÓN DE CONTRASEÑA (admins / DSPs)
 # =========================
 
-async def _send_resend_email(to: str, subject: str, html: str,
-                             responder_a: str = "", copia: Optional[list] = None,
-                             texto: str = "") -> bool:
-    """Envía un email transaccional con Resend. Devuelve False si falla.
-    Remitente configurable con EMAIL_FROM (contacto@flotadsp.com en
-    producción); OJO: el dominio del remitente DEBE estar verificado en
-    resend.com/domains o Resend devuelve 403 y no envía nada. Registramos el
-    error REAL para no fallar en silencio (antes un dominio sin verificar
-    parecía 'no configurado')."""
-    resend_key = os.environ.get("RESEND_API_KEY", "")
-    if not (resend_key and to):
-        logger.warning("email: RESEND_API_KEY o destinatario ausente — no se envía")
-        return False
-    sender = os.environ.get("EMAIL_FROM", "FlotaDSP <hola@flotadsp.com>")
-    import httpx as _httpx
-    try:
-        async with _httpx.AsyncClient(timeout=15) as _c:
-            r = await _c.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                json={k: v for k, v in {
-                    "from": sender, "to": [to], "subject": subject, "html": html,
-                    # RESPONDER-A ES LO QUE HACE QUE LA RESPUESTA LLEGUE. El
-                    # correo sale de contacto@flotadsp.com, asi que sin esto la
-                    # contestacion se queda en ese buzon; con esto va a donde
-                    # de verdad se lee.
-                    "reply_to": responder_a or None,
-                    "cc": list(copia) if copia else None,
-                    # Version en texto plano: hay clientes -y filtros de spam-
-                    # que puntuan peor un correo que solo trae HTML.
-                    "text": texto or None,
-                }.items() if v is not None},
-            )
-        if r.status_code >= 300:
-            logger.error(f"email: Resend rechazó el envío a {to} ({r.status_code}): {r.text[:300]}")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"email: excepción enviando a {to}: {e}")
-        return False
-
-
 _RESET_TOKEN_TTL_MIN = 60  # el enlace caduca en 1 hora
+
+
+# CORREO SALIENTE: DOS PROVEEDORES, Y EL SEGUNDO ENTRA SOLO.
+# Resend tiene 100 correos al dia en el plan gratuito y la campana de
+# candidatos son dos por persona: el 19-09-2026 salieron 97 personas y 127 se
+# quedaron sin nada, con la cuenta al 200 %. Brevo da 300 al dia, asi que se
+# usa como respaldo — no se reparte el trafico a medias, que ensucia la
+# reputacion de los dos dominios: Resend sigue siendo el primero y Brevo solo
+# recoge lo que ya no cabe. Cada uno lleva su propio dia de «hoy ya no»,
+# porque los dos contadores se reinician por separado.
+_EMAIL_CUOTA_DIA: dict = {}
+
+
+def _email_hoy() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _email_proveedores() -> list:
+    """Los que PUEDEN enviar ahora mismo, en orden de preferencia."""
+    hoy, fuera = _email_hoy(), []
+    for nombre, clave in (("resend", "RESEND_API_KEY"), ("brevo", "BREVO_API_KEY")):
+        if os.environ.get(clave) and _EMAIL_CUOTA_DIA.get(nombre) != hoy:
+            fuera.append(nombre)
+    return fuera
+
+
+def _email_sin_cuota_hoy() -> bool:
+    """Ninguno puede enviar hoy. Lo mira la campana para cortar en seco en vez
+    de seguir creando cupones de Stripe que nadie va a recibir."""
+    return not _email_proveedores()
+
+
+def _email_remitente() -> tuple:
+    """EMAIL_FROM viene como `FlotaDSP <hola@flotadsp.com>`; Brevo quiere el
+    nombre y la direccion por separado."""
+    bruto = os.environ.get("EMAIL_FROM", "FlotaDSP <hola@flotadsp.com>")
+    m = re.match(r"^\s*(.*?)\s*<([^>]+)>\s*$", bruto)
+    if m:
+        return (m.group(1) or "FlotaDSP"), m.group(2)
+    return "FlotaDSP", bruto.strip()
+
+
+async def _resend_enviar(cli, to: str, subject: str, html: str,
+                         responder_a: str, copia: Optional[list], texto: str):
+    r = await cli.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {os.environ.get('RESEND_API_KEY', '')}",
+                 "Content-Type": "application/json"},
+        json={k: v for k, v in {
+            "from": os.environ.get("EMAIL_FROM", "FlotaDSP <hola@flotadsp.com>"),
+            "to": [to], "subject": subject, "html": html,
+            # RESPONDER-A ES LO QUE HACE QUE LA RESPUESTA LLEGUE. El correo
+            # sale de contacto@flotadsp.com, asi que sin esto la contestacion
+            # se queda en ese buzon; con esto va a donde de verdad se lee.
+            "reply_to": responder_a or None,
+            "cc": list(copia) if copia else None,
+            # Version en texto plano: hay clientes -y filtros de spam- que
+            # puntuan peor un correo que solo trae HTML.
+            "text": texto or None,
+        }.items() if v is not None})
+    agotado = r.status_code == 429 and "daily_quota_exceeded" in r.text
+    return r.status_code < 300, agotado, r.status_code, r.text[:300]
+
+
+async def _brevo_enviar(cli, to: str, subject: str, html: str,
+                        responder_a: str, copia: Optional[list], texto: str):
+    nombre, correo = _email_remitente()
+    r = await cli.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={"api-key": os.environ.get("BREVO_API_KEY", ""),
+                 "content-type": "application/json", "accept": "application/json"},
+        json={k: v for k, v in {
+            "sender": {"name": nombre, "email": correo},
+            "to": [{"email": to}], "subject": subject, "htmlContent": html,
+            "textContent": texto or None,
+            "replyTo": {"email": responder_a} if responder_a else None,
+            "cc": [{"email": c} for c in copia] if copia else None,
+        }.items() if v is not None})
+    # 402 es «sin creditos» y 429 su limite por minuto/dia: las dos significan
+    # que por hoy no se cuenta con el, no que este correo estuviera mal.
+    agotado = r.status_code in (402, 429)
+    return r.status_code < 300, agotado, r.status_code, r.text[:300]
+
+
+async def _enviar_email(to: str, subject: str, html: str,
+                        responder_a: str = "", copia: Optional[list] = None,
+                        texto: str = "") -> bool:
+    """Envia un correo transaccional. Devuelve False si no lo coge nadie.
+
+    OJO con el remitente: su dominio DEBE estar verificado en el proveedor
+    (resend.com/domains, app.brevo.com/senders/domain) o devuelve 403 y no
+    envia nada. Se registra el error REAL para no fallar en silencio — antes un
+    dominio sin verificar parecia «no configurado»."""
+    proveedores = _email_proveedores()
+    if not (proveedores and to):
+        logger.warning("email: sin proveedor con cuota o sin destinatario — no se envía a %s", to or "?")
+        return False
+    import httpx as _httpx
+    for nombre in proveedores:
+        try:
+            async with _httpx.AsyncClient(timeout=15) as _c:
+                enviar = _resend_enviar if nombre == "resend" else _brevo_enviar
+                ok, agotado, codigo, cuerpo = await enviar(
+                    _c, to, subject, html, responder_a, copia, texto)
+            if ok:
+                return True
+            if agotado:
+                _EMAIL_CUOTA_DIA[nombre] = _email_hoy()
+                logger.error("email: %s sin cuota por hoy (%s) — se prueba el siguiente", nombre, codigo)
+                continue
+            logger.error("email: %s rechazó el envío a %s (%s): %s", nombre, to, codigo, cuerpo)
+            # Un rechazo que NO es de cuota (un correo mal escrito, una
+            # plantilla invalida) le pasaria igual al siguiente: no se
+            # reintenta para no mandar dos veces lo mismo si acierta.
+            return False
+        except Exception as e:                                   # noqa: BLE001
+            logger.error("email: excepción enviando a %s por %s: %s", to, nombre, e)
+    return False
 
 
 @auth_router.post("/forgot-password")
@@ -6134,7 +6210,7 @@ async def forgot_password(data: dict, request: Request):
   </div>
 </div>"""
         try:
-            sent = await _send_resend_email(email, "Restablece tu contraseña de FlotaDSP", html)
+            sent = await _enviar_email(email, "Restablece tu contraseña de FlotaDSP", html)
             if not sent:
                 logger.warning("forgot-password: RESEND_API_KEY no configurada, email no enviado")
         except Exception as _fe:
@@ -13897,7 +13973,7 @@ async def enviar_resumen_diario(dia: Optional[str] = None, solo_id: Optional[str
         for d in quienes:
             if not d.get("email"):
                 continue
-            if await _send_resend_email(d["email"], asunto, html):
+            if await _enviar_email(d["email"], asunto, html):
                 correos.append(d["email"])
             else:
                 logger.warning("Resumen diario: no se pudo enviar a %s", d["email"])
@@ -16105,7 +16181,7 @@ async def send_weekly_email_digest():
     </p>
   </div>
 </div>"""
-            ok = await _send_resend_email(
+            ok = await _enviar_email(
                 org["email"],
                 f"Tu semana en FlotaDSP: {n_insp} inspecciones, {n_damages} con daños nuevos",
                 html,
@@ -19729,7 +19805,7 @@ async def admin_correo_enviar(body: dict = Body(...), user: dict = Depends(requi
                             % recientes)
 
     quien = user.get("name") or user.get("username") or ""
-    ok = await _send_resend_email(
+    ok = await _enviar_email(
         para, asunto, _correo_html(cuerpo), responder_a=responder,
         copia=copia or None, texto=cuerpo)
     doc = {
@@ -37778,7 +37854,7 @@ async def dnr_enviar(body: dict = Body(...), user: dict = Depends(require_admin)
     # dentro del base64 lo parte.
     html = ("<pre style=\"font-family:monospace;white-space:pre-wrap;"
             "word-break:break-all\">%s</pre>" % html_escape(cuerpo))
-    ok = await _send_resend_email(
+    ok = await _enviar_email(
         _DNR_CORREO, preparado["asunto"], html,
         responder_a=(copia[0] if copia else ""), copia=copia, texto=cuerpo)
     if not ok:
@@ -50484,7 +50560,7 @@ async def _avisar_suscriptores_empleo(oferta: dict) -> None:
         </div>"""
         for s in subs:
             if s.get("email"):
-                await _send_resend_email(s["email"], asunto, html)  # EMAIL_FROM ya es contacto@flotadsp.com
+                await _enviar_email(s["email"], asunto, html)  # EMAIL_FROM ya es contacto@flotadsp.com
     except Exception as e:                                    # noqa: BLE001
         logger.warning("Aviso a suscriptores de empleo: %s", e)
 
@@ -50550,6 +50626,38 @@ def _candidatos_campana_html_suscripcion(nombre: str, url_suscripcion: str) -> s
     </div>"""
 
 
+async def _campana_apuntar(modo: str, tipo: str, correo: str) -> None:
+    """Deja constancia de que ESE correo ya salio. Insert-only y por (tipo,
+    correo): es lo que permite reanudar manana sin repetirselo a nadie."""
+    if modo != "real":
+        return
+    try:
+        await db.candidatos_campana_envios.update_one(
+            {"_id": f"{tipo}:{correo}"},
+            {"$setOnInsert": {"en": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    except Exception as e:                                       # noqa: BLE001
+        logger.error("campana: no se pudo apuntar %s a %s: %s", tipo, correo, e)
+
+
+_CAMPANA_CORREOS = ("cupon", "suscripcion")
+
+
+def _campana_pendientes(destinatarios: list, ya_enviados: set) -> list:
+    """De cada persona, QUE correos le faltan todavia.
+
+    La campana son dos correos por cabeza y Resend corta por cuota diaria (100
+    al dia en el plan gratuito): el 19-09-2026 se quedaron 127 personas sin
+    nada. Repetir la campana tal cual se la mandaria otra vez a los 97 que ya
+    la tenian, con un cupon nuevo cada uno — spam y dinero. Con lo ya enviado
+    apuntado por (tipo, correo), reanudar manana manda SOLO lo que falta."""
+    salida = []
+    for d in destinatarios:
+        faltan = [t for t in _CAMPANA_CORREOS if f"{t}:{d['email']}" not in ya_enviados]
+        if faltan:
+            salida.append({**d, "faltan": faltan})
+    return salida
+
+
 def _campana_destinatarios(fichas: list) -> list:
     """Una persona, un correo. La MISMA direccion aparece en varias
     candidaturas —253 fichas para 224 correos el 19-09-2026—, y una campana
@@ -50604,28 +50712,53 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
     # antes de gastarlo. Admite tres usos (`_CAMPANA_CUPON_USOS`): uno por
     # prenda, para que quien se lleve el hoodie conserve el descuento en el
     # cortavientos y en la gorra.
-    enviados, fallidos, sin_cupon = 0, 0, 0
+    # LO YA ENVIADO NO SE REPITE. En modo prueba no cuenta: es para mirarlo.
+    if modo == "real":
+        ya = {e["_id"] for e in await db.candidatos_campana_envios.find(
+            {}, {"_id": 1}).to_list(20000)}
+        destinatarios = _campana_pendientes(destinatarios, ya)
+    else:
+        destinatarios = [{**d, "faltan": list(_CAMPANA_CORREOS)} for d in destinatarios]
+
+    enviados, fallidos, sin_cupon, pendientes = 0, 0, 0, 0
     ultima_expira = None
-    for d in destinatarios:
-        cupon = await _stripe_crear_cupon(
-            _CAMPANA_CUPON_EUR, _CAMPANA_CUPON_HORAS, usos=_CAMPANA_CUPON_USOS)
-        if not cupon:
-            sin_cupon += 1
-            fallidos += 1
-            continue
-        ultima_expira = cupon["expira_en"]
-        # La caducidad viaja en la URL para que la tienda pueda pintar una
-        # cuenta atras real — sin esto, cada persona veia el mismo texto fijo
-        # sin saber si le quedan 10 minutos o 3 horas y media.
-        url_tienda = f"{enlace_tienda}?cupon={cupon['id']}&exp={_url_quote(cupon['expira_en'])}"
+    for n, d in enumerate(destinatarios):
+        # Cortar EN CUANTO Resend dice que por hoy no hay mas: seguir solo
+        # sirve para tirar un cupon de Stripe por cabeza y acumular rechazos.
+        if _email_sin_cuota_hoy():
+            pendientes = len(destinatarios) - n
+            break
+        quiere_cupon = "cupon" in d["faltan"]
+        cupon = None
+        if quiere_cupon:
+            cupon = await _stripe_crear_cupon(
+                _CAMPANA_CUPON_EUR, _CAMPANA_CUPON_HORAS, usos=_CAMPANA_CUPON_USOS)
+            if not cupon:
+                sin_cupon += 1
+                fallidos += 1
+                continue
+            ultima_expira = cupon["expira_en"]
         nombre = d.get("nombre") or ""
-        html_cupon = _candidatos_campana_html_cupon(nombre, url_tienda, cupon["expira_en"])
-        html_sub = _candidatos_campana_html_suscripcion(nombre, url_suscripcion)
-        ok1 = await _send_resend_email(d["email"], "Un regalo por tu candidatura con FlotaDSP", html_cupon,
-                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
-        ok2 = await _send_resend_email(d["email"], "Entérate el primero de los próximos empleos", html_sub,
-                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
-        if ok1 or ok2:
+        algo = False
+        if cupon:
+            # La caducidad viaja en la URL para que la tienda pueda pintar una
+            # cuenta atras real — sin esto, cada persona veia el mismo texto
+            # fijo sin saber si le quedan 10 minutos o 3 horas y media.
+            url_tienda = f"{enlace_tienda}?cupon={cupon['id']}&exp={_url_quote(cupon['expira_en'])}"
+            if await _enviar_email(
+                    d["email"], "Un regalo por tu candidatura con FlotaDSP",
+                    _candidatos_campana_html_cupon(nombre, url_tienda, cupon["expira_en"]),
+                    responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", "")):
+                algo = True
+                await _campana_apuntar(modo, "cupon", d["email"])
+        if "suscripcion" in d["faltan"]:
+            if await _enviar_email(
+                    d["email"], "Entérate el primero de los próximos empleos",
+                    _candidatos_campana_html_suscripcion(nombre, url_suscripcion),
+                    responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", "")):
+                algo = True
+                await _campana_apuntar(modo, "suscripcion", d["email"])
+        if algo:
             enviados += 1
         else:
             fallidos += 1
@@ -50635,11 +50768,15 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
             "id": str(uuid.uuid4()), "tipo": "bienvenida_cv",
             "enviados": enviados, "fallidos": fallidos, "sin_cupon": sin_cupon,
             "destinatarios": len(destinatarios), "expira_en": ultima_expira,
+            "pendientes": pendientes,
             "enviado_en": datetime.now(timezone.utc).isoformat(),
             "enviado_por": user.get("name") or user.get("username") or "",
         })
     return {"ok": True, "modo": modo, "enviados": enviados, "fallidos": fallidos,
-            "destinatarios": len(destinatarios), "expira_en": ultima_expira}
+            "destinatarios": len(destinatarios), "expira_en": ultima_expira,
+            # Lo que queda para la proxima vez. `sin_cuota` es la diferencia
+            # entre «no habia a quien mandar» y «hoy ya no salen mas correos».
+            "pendientes": pendientes, "sin_cuota": _email_sin_cuota_hoy()}
 
 
 # -------------------------------------------------------------------------
