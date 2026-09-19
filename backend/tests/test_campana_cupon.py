@@ -121,6 +121,37 @@ def test_un_cupon_mayor_que_el_pedido_no_marca_descuadre():
         "el importe esperado del webhook vuelve a poder ser negativo")
 
 
+def test_la_campana_no_manda_dos_veces_al_mismo_correo():
+    """La misma persona se postula a varias ofertas y deja varias fichas: el
+    19-09-2026 habia 253 fichas con correo para 224 direcciones distintas. Una
+    campana sobre las FICHAS le manda dos correos identicos y crea DOS cupones
+    personales -60 EUR regalados a la misma persona en vez de 30- y encima
+    parece spam justo a quien se esta intentando recuperar."""
+    ent = {}
+    exec(_fuente_de("_campana_destinatarios"), ent)
+    salida = ent["_campana_destinatarios"]([
+        {"email": "ana@correo.com", "nombre": ""},
+        {"email": "  Ana@Correo.com ", "nombre": "Ana"},
+        {"email": "berto@correo.com", "nombre": "Berto"},
+        {"email": "", "nombre": "sin correo"},
+        {"nombre": "ni campo"},
+    ])
+    assert [d["email"] for d in salida] == ["ana@correo.com", "berto@correo.com"]
+    # Y el nombre se rescata de la otra ficha: la primera lo tenia vacio.
+    assert salida[0]["nombre"] == "Ana"
+
+
+def _fuente_de(nombre):
+    """El codigo REAL de una funcion de server.py, sin importar el modulo (que
+    arrancaria conexiones). Gotcha 40: una copia deja de probar lo que corre."""
+    import ast
+    fuente = _servidor()
+    for n in ast.parse(fuente).body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == nombre:
+            return ast.get_source_segment(fuente, n)
+    raise AssertionError(nombre + " ya no existe en server.py")
+
+
 def main():
     """Para el runner que ejecuta ficheros sueltos (run_all.py aguanta las dos
     formas)."""

@@ -221,17 +221,35 @@ def test_el_origen_solo_cuenta_a_quien_llega_a_paginas_publicas():
     assert {c["canal"]: c["sesiones"] for c in r["canales"]} == {"google.com": 1, "directo": 1}
 
 
-if __name__ == "__main__":
-    fallos = 0
-    for nombre, f in sorted(globals().items()):
-        if nombre.startswith("test_") and callable(f):
-            try:
-                f()
-                print("ok  ", nombre)
-            except Exception as ex:                              # noqa: BLE001
-                fallos += 1
-                print("FALLA", nombre, repr(ex))
-    sys.exit(1 if fallos else 0)
+def test_el_portal_del_conductor_mide_sus_pantallas_y_no_el_slug():
+    """El portal es UNA url con ocho pantallas dentro. Midiendolo por cambio de
+    ruta solo se veia `/conductor` —la pantalla de entrada, antes de que nadie
+    entrara—: el 19-09-2026 eso dejaba 29 de 42 visitas como «sin cuenta» y «se
+    van aqui, 100 %», sin forma de saber hasta donde llegaban. Ahora cada
+    seccion viaja como `/conductor/p/<seccion>`; el slug de la empresa, no."""
+    assert an.limpiar_ruta("/conductor/mi-empresa") == "/conductor/:slug"
+    assert an.limpiar_ruta("/conductor/OGA5") == "/conductor/:slug"
+    assert an.limpiar_ruta("/conductor/p/tienda") == "/conductor/p/tienda"
+    assert an.limpiar_ruta("/conductor") == "/conductor"
+
+    evs = _ordenar([
+        _ev("portal0000000001", 20, "/conductor/p/entrada"),
+        _ev("portal0000000001", 18, "/conductor/p/inicio", seg="conductor"),
+        _ev("portal0000000001", 12, "/conductor/p/auditoria", seg="conductor"),
+        _ev("portal0000000001", 5, "/conductor/p/hecho", seg="conductor"),
+    ])
+    d = an.informe(evs, AHORA, seg="todos")
+    filas = {f["ruta"]: f for f in d["pantallas"]}
+    assert len(filas) == 4, "cada seccion es una pantalla"
+    # Quien entra lo hace por la de entrada, y de ahi NO se va nadie: sigue.
+    assert filas["/conductor/p/entrada"]["entradas"] == 1
+    assert filas["/conductor/p/entrada"]["salidas"] == 0
+    # El tiempo de cada pantalla se mide hasta la siguiente; la ultima no se sabe.
+    assert filas["/conductor/p/entrada"]["segundos_mediana"] == 120
+    assert filas["/conductor/p/hecho"]["segundos_mediana"] is None
+    # Y el token manda: entra sin cuenta y acaba contando como conductor.
+    assert d["por_segmento"]["conductor"] == 1
+    assert d["por_segmento"]["visitante"] == 0
 
 
 def test_el_contador_de_cada_segmento_no_depende_del_filtro():
@@ -253,3 +271,16 @@ def test_el_contador_de_cada_segmento_no_depende_del_filtro():
     # Y lo filtrado sigue siendo lo filtrado: el equipo propio no cuenta.
     assert fuera["resumen"]["sesiones"] == 2
     assert todos["resumen"]["sesiones"] == 3
+
+
+if __name__ == "__main__":
+    fallos = 0
+    for nombre, f in sorted(globals().items()):
+        if nombre.startswith("test_") and callable(f):
+            try:
+                f()
+                print("ok  ", nombre)
+            except Exception as ex:                              # noqa: BLE001
+                fallos += 1
+                print("FALLA", nombre, repr(ex))
+    sys.exit(1 if fallos else 0)

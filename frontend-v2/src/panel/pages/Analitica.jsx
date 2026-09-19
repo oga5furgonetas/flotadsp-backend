@@ -29,6 +29,16 @@ const AREAS = {
   acceso: 'Acceso', otra: 'Otras',
 }
 
+/* Las pantallas del portal del conductor viven DENTRO de una sola URL y
+   viajan como `/conductor/p/<seccion>`. El nombre es solo para poder leerlas
+   aqui: la ruta sigue siendo lo que manda. */
+const PORTAL = {
+  entrada: 'Entrar', inicio: 'Inicio', auditoria: 'Inspección', hecho: 'Inspección hecha',
+  dias: 'Pedir días', turnos: 'Mis turnos', clave: 'Mi clave', tienda: 'Tienda',
+  numeros: 'Mis números', ayudas: 'Mis ayudas',
+}
+const seccionPortal = (ruta) => (ruta.startsWith('/conductor/p/') ? PORTAL[ruta.slice(13)] : null)
+
 const num = (n) => (n == null ? '—' : n.toLocaleString('es-ES'))
 const pct = (n) => (n == null ? '—' : `${String(n).replace('.', ',')} %`)
 
@@ -260,7 +270,10 @@ export default function Analitica() {
                     <tr key={p.ruta} className="border-b border-dark-900/70 last:border-0">
                       <td className="px-3 py-1.5">
                         <span className="font-mono text-[12px] text-dark-100">{p.ruta}</span>
-                        <span className="ml-2 text-[11px] text-dark-600">{AREAS[p.area] || p.area}</span>
+                        <span className="ml-2 text-[11px] text-dark-600">
+                          {AREAS[p.area] || p.area}
+                          {seccionPortal(p.ruta) ? ` · ${seccionPortal(p.ruta)}` : ''}
+                        </span>
                         {p.empresas > 0 && <span className="ml-2 text-[11px] text-dark-600">{num(p.empresas)} empresa(s)</span>}
                       </td>
                       <td className="px-2.5 py-1.5 text-right tabular-nums text-dark-200">{num(p.sesiones)}</td>

@@ -49,6 +49,9 @@ const PATRONES = [
   [/^\/dnr\/[^/]+$/, '/dnr/:token'],
   [/^\/empleo\/[^/]+\/[^/]+$/, '/empleo/:slug/:oferta'],
   [/^\/empleo\/[^/]+$/, '/empleo/:slug'],
+  // El portal mide sus pantallas como `/conductor/p/<seccion>`; una segunda
+  // parte que no sea `p` es el slug de la empresa, que no hace falta medir.
+  [/^\/conductor\/(?!p\/)[^/]+$/, '/conductor/:slug'],
   [/^\/verify\/[^/]+$/, '/verify/:token'],
   [/^\/reset-password\/[^/]+$/, '/reset-password/:token'],
 ]
@@ -103,12 +106,28 @@ function mandar(cuerpo) {
 
 let ultima = null
 
-export function medirVista(ruta) {
-  const r = patronDe(ruta)
+/* El portal del conductor es UNA sola URL con ocho pantallas dentro, asi que
+   se mide el solo con `medirSeccion`. Si ademas lo midiera el cambio de ruta,
+   cada visita contaria dos veces la misma pantalla — y siempre la primera, la
+   de antes de entrar: el 19-09-2026 eso dejaba 29 de 42 visitas como «sin
+   cuenta, se van aqui, 100 %», que es justo lo contrario de lo que pasaba. */
+const SE_MIDEN_SOLAS = /^\/conductor(\/|$)/
+
+function vista(r) {
   // Recargar o cambiar solo la query no es una pantalla nueva.
   if (r === ultima) return
   ultima = r
   mandar({ tipo: 'vista', ruta: r })
+}
+
+export function medirVista(ruta) {
+  const r = patronDe(ruta)
+  if (SE_MIDEN_SOLAS.test(r)) return
+  vista(r)
+}
+
+export function medirSeccion(ruta) {
+  vista(patronDe(ruta))
 }
 
 export function medirAccion(nombre) {

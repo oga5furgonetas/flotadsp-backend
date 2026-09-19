@@ -75,6 +75,11 @@ def limpiar_ruta(r):
         return "/"
     if segs[0] not in PRIMEROS:
         return "/otra"
+    # El portal del conductor manda sus pantallas como `/conductor/p/<seccion>`.
+    # Cualquier otra segunda parte es el slug de la empresa: no aporta nada aqui
+    # y se queda fuera.
+    if segs[0] == "conductor" and len(segs) == 2 and segs[1] != "p":
+        return "/conductor/:slug"
     out = []
     for s in segs[:4]:
         if re.fullmatch(r":[a-z]{1,15}", s) or re.fullmatch(r"[a-z][a-z-]{0,29}", s):

@@ -50550,6 +50550,28 @@ def _candidatos_campana_html_suscripcion(nombre: str, url_suscripcion: str) -> s
     </div>"""
 
 
+def _campana_destinatarios(fichas: list) -> list:
+    """Una persona, un correo. La MISMA direccion aparece en varias
+    candidaturas —253 fichas para 224 correos el 19-09-2026—, y una campana
+    sobre las fichas se manda dos veces a quien se postulo dos veces: dos
+    correos identicos y DOS cupones personales, o sea 60 EUR regalados a la
+    misma persona en vez de 30. Se queda el primer nombre que no venga vacio,
+    porque una de las dos fichas puede tenerlo sin rellenar."""
+    vistos, salida = {}, []
+    for f in fichas:
+        correo = (f.get("email") or "").strip().lower()
+        if not correo:
+            continue
+        nombre = (f.get("nombre") or "").strip()
+        if correo in vistos:
+            if not vistos[correo]["nombre"] and nombre:
+                vistos[correo]["nombre"] = nombre
+            continue
+        vistos[correo] = {"email": correo, "nombre": nombre}
+        salida.append(vistos[correo])
+    return salida
+
+
 @api_router.post("/admin/candidatos/campana-bienvenida")
 async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Depends(require_superadmin)):
     modo = _texto_cuerpo(body.get("modo"), 10) or "prueba"
@@ -50573,8 +50595,9 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
             raise HTTPException(400, "Pon un correo válido en email_prueba para la prueba")
         destinatarios = [{"email": email_prueba, "nombre": user.get("name") or "Dani"}]
     else:
-        destinatarios = await db.candidatos.find(
+        fichas = await db.candidatos.find(
             {"email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "nombre": 1}).to_list(2000)
+        destinatarios = _campana_destinatarios(fichas)
 
     # Un cupón PERSONAL por destinatario, con su propio reloj de 4h desde que se
     # genera — no uno compartido que cualquiera pudiera reenviar a otra persona

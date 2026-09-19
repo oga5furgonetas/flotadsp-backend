@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban, BarChart3, LifeBuoy, ShoppingBag } from 'lucide-react'
 import { getPortalVehicles, getMyShifts, getMiFicha, guardarMiTelefono, tiendaEscaparate, DRIVER_TOKEN_KEY } from '../../services/api'
 import { lista } from '../../lib/lista'
+import { medirSeccion } from '../../lib/analitica'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
 import InspectionDone from './InspectionDone'
@@ -126,6 +127,13 @@ export default function DriverPortal() {
   const [telOk, setTelOk] = useState(false)
   const [guardandoTel, setGuardandoTel] = useState(false)
   const [errTel, setErrTel] = useState('')
+
+  /* CUENTA SUS PANTALLAS EL, que son ocho dentro de una sola URL. Midiendolo
+     por cambio de ruta solo se veia la de entrada, antes de que nadie entrara:
+     todas las visitas salian «sin cuenta» y «se van aqui», y no habia forma de
+     saber hasta donde llegan. */
+  const seccion = !driver ? 'entrada' : (result ? 'hecho' : vista)
+  useEffect(() => { medirSeccion('/conductor/p/' + seccion) }, [seccion])
 
   /* Si falla, no se pregunta: es mejor no pedir el telefono que ensenar un
      formulario roto a alguien que solo queria hacer su inspeccion. */
