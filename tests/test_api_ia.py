@@ -110,5 +110,55 @@ r = c.get("/api/ia/capacidades")
 check("GET /capacidades da el texto para el prompt",
       r.status_code == 200 and "/api/ia/comando" in r.json()["texto"], r.text[:200])
 
+print("\n== CHAT DE LA APP ==")
+
+prompts = []
+
+
+async def fake_gemini(prompt):
+    prompts.append(prompt)
+    return "Hoy salen 2 rutas en DGA1."
+
+
+app2 = FastAPI()
+db2 = FakeDB()
+app2.include_router(T.construir_router(db2, fake_admin, notificar=notificar, gemini=fake_gemini))
+c2 = TestClient(app2)
+
+r = c2.post("/api/ia/chat", json={"texto": "monta la plantilla de DGA1 mañana cuando salgan en cortex"})
+check("una orden se ejecuta, no se le pasa a la IA",
+      r.status_code == 200 and r.json()["accion"] == "programar" and not prompts, r.text[:200])
+
+r = c2.post("/api/ia/chat", json={"texto": "¿cuántas rutas salen hoy?"})
+j = r.json()
+check("una pregunta la contesta la IA", r.status_code == 200 and j["accion"] == "conversacion"
+      and j["respuesta"] == "Hoy salen 2 rutas en DGA1.", r.text[:200])
+check("el prompt lleva el encargo programado de verdad",
+      "DGA1" in prompts[-1] and "ENCARGOS PROGRAMADOS" in prompts[-1], prompts[-1][:300])
+check("el prompt le dice que SÍ puede programar",
+      "queda programado" in prompts[-1], prompts[-1][:300])
+
+r = c2.post("/api/ia/chat", json={"texto": "y mañana?"})
+check("el chat recuerda lo anterior (memoria)",
+      "¿cuántas rutas salen hoy?" in prompts[-1], prompts[-1][-400:])
+
+r = c2.get("/api/ia/chat/historial")
+check("GET /chat/historial devuelve la conversación",
+      r.status_code == 200 and len(r.json()["mensajes"]) == 6, r.text[:200])
+
+r = c2.delete("/api/ia/chat/historial")
+check("DELETE /chat/historial la borra", r.status_code == 200
+      and len(c2.get("/api/ia/chat/historial").json()["mensajes"]) == 0, r.text[:200])
+
+# Sin IA configurada (sin GEMINI_API_KEY): contesta la verdad y lo registra
+app3 = FastAPI()
+db3 = FakeDB()
+app3.include_router(T.construir_router(db3, fake_admin))
+c3 = TestClient(app3)
+r = c3.post("/api/ia/chat", json={"texto": "¿qué tal el día?"})
+check("sin IA: responde honesto y lo registra",
+      r.status_code == 200 and r.json()["accion"] is None
+      and db3["ia_peticiones"].docs[0]["motivo"] == "sin_ia", r.text[:200])
+
 print("\n" + ("TODO OK" if not fallos else f"{len(fallos)} FALLOS: {fallos}"))
 sys.exit(1 if fallos else 0)

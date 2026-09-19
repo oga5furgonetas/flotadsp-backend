@@ -10112,7 +10112,39 @@ try:
         """Avisa por Telegram cuando una tarea programada ya está hecha."""
         await send_telegram_alert(titulo, mensaje, severity="info")
 
-    app.include_router(tareas_ia.construir_router(db, require_admin, notificar=_ia_avisar))
+    async def _ia_gemini(prompt: str) -> str:
+        """Texto libre a Gemini: lo que el chat usa cuando no es una orden concreta."""
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+        clave = os.environ.get("GEMINI_API_KEY", "")
+        usar_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+        if not clave and not usar_vertex:
+            return ""
+        if usar_vertex:
+            from google.oauth2 import service_account
+            import json as _json, base64 as _b64
+            sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+            if sa and not sa.startswith("{"):
+                sa = _b64.b64decode(sa).decode("utf-8")
+            creds = service_account.Credentials.from_service_account_info(
+                _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+            cliente = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                       location=os.environ.get("GCP_LOCATION", "us-central1"),
+                                       credentials=creds)
+        else:
+            cliente = genai_sdk.Client(api_key=clave)
+        cfg = genai_types.GenerateContentConfig(temperature=0.3)
+        loop = asyncio.get_running_loop()
+        async with _gemini_sem:   # el mismo límite que el resto de llamadas
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(_executor, lambda: cliente.models.generate_content(
+                    model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                    contents=[prompt], config=cfg)),
+                timeout=45.0)
+        return (resp.text or "").strip()
+
+    app.include_router(tareas_ia.construir_router(
+        db, require_admin, notificar=_ia_avisar, gemini=_ia_gemini))
 
     @app.on_event("startup")
     async def start_tareas_ia():

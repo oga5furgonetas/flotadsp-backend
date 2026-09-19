@@ -61,15 +61,24 @@ class FakeCol:
         self.docs.append(copy.deepcopy(doc))
         return SimpleNamespace(inserted_id=doc.get("id"))
 
-    async def update_one(self, q, upd):
+    async def update_one(self, q, upd, upsert=False):
         for d in self.docs:
             if self._match(d, q):
                 for k, v in (upd.get("$set") or {}).items():
                     d[k] = copy.deepcopy(v)
                 for k, v in (upd.get("$inc") or {}).items():
                     d[k] = (d.get(k) or 0) + v
-                return SimpleNamespace(modified_count=1, matched_count=1)
-        return SimpleNamespace(modified_count=0, matched_count=0)
+                for k in (upd.get("$unset") or {}):
+                    d.pop(k, None)
+                return SimpleNamespace(modified_count=1, matched_count=1, upserted_id=None)
+        if upsert:
+            nuevo = {k: v for k, v in (q or {}).items() if not isinstance(v, dict)}
+            nuevo.update(copy.deepcopy(upd.get("$set") or {}))
+            for k, v in (upd.get("$inc") or {}).items():
+                nuevo[k] = v
+            self.docs.append(nuevo)
+            return SimpleNamespace(modified_count=0, matched_count=0, upserted_id=nuevo.get("id"))
+        return SimpleNamespace(modified_count=0, matched_count=0, upserted_id=None)
 
     async def delete_many(self, q):
         antes = len(self.docs)

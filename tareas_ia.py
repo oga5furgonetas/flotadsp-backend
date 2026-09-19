@@ -805,7 +805,7 @@ _RE_AÑADIR = re.compile(r"\b(ademas|anade|anades|anadir|suma|sumale|agrega|agre
 
 
 async def procesar_mensaje(db, texto, centro=None, centros=None, usuario=None,
-                           notificar=None, fecha=None, hoy=None):
+                           notificar=None, fecha=None, hoy=None, registrar=True):
     """Convierte el mensaje del dispatcher en acciones reales.
 
     Devuelve {accion, respuesta, datos}. `respuesta` está escrita para soltarla
@@ -906,8 +906,11 @@ async def procesar_mensaje(db, texto, centro=None, centros=None, usuario=None,
         res = await _resolver_plantilla(db, fecha_final or hoy_str, centro, texto, usuario, hoy_str, notificar)
         return {"accion": res["accion"], "datos": res["datos"], "respuesta": res["respuesta"]}
 
-    # ---- 5. Esto todavía no lo sé hacer ---------------------------------------
-    pet = await registrar_peticion(db, texto, centro=centro, usuario=usuario, motivo="no_entendida")
+    # ---- 5. No es una orden conocida ------------------------------------------
+    # (el chat lo intentará luego como conversación; por eso se puede no registrar)
+    pet = None
+    if registrar:
+        pet = await registrar_peticion(db, texto, centro=centro, usuario=usuario, motivo="no_entendida")
     return {
         "accion": None,
         "datos": {"peticion": pet},
@@ -998,15 +1001,189 @@ REGLAS
 
 
 # =============================================================================
+# EL CHAT DE LA APP
+# =============================================================================
+
+COL_CONVERSACIONES = "ia_conversaciones"
+MAX_MEMORIA = 40          # turnos que se recuerdan por conversación
+
+
+def id_conversacion(usuario):
+    """Cada dispatcher tiene su propia conversación."""
+    if isinstance(usuario, dict):
+        return str(usuario.get("sub") or usuario.get("name") or "chat")
+    return str(usuario or "chat")
+
+
+async def historial_chat(db, conv_id, limite=MAX_MEMORIA):
+    doc = await db[COL_CONVERSACIONES].find_one({"id": conv_id}, {"_id": 0})
+    return ((doc or {}).get("mensajes") or [])[-limite:]
+
+
+async def guardar_turno(db, conv_id, pregunta, respuesta, usuario=None):
+    """Guarda la pregunta y la respuesta. Esto es la memoria del chat."""
+    historial = await historial_chat(db, conv_id, limite=MAX_MEMORIA * 2)
+    historial += [
+        {"rol": "dispatcher", "texto": (pregunta or "")[:4000], "at": ahora_iso()},
+        {"rol": "flotadsp", "texto": (respuesta or "")[:8000], "at": ahora_iso()},
+    ]
+    historial = historial[-MAX_MEMORIA:]
+    await db[COL_CONVERSACIONES].update_one(
+        {"id": conv_id},
+        {"$set": {"id": conv_id, "mensajes": historial, "actualizada_at": ahora_iso(),
+                  "usuario": (usuario or {}).get("name") if isinstance(usuario, dict) else usuario}},
+        upsert=True)
+    return historial
+
+
+async def borrar_historial(db, conv_id):
+    r = await db[COL_CONVERSACIONES].delete_many({"id": conv_id})
+    return getattr(r, "deleted_count", 0)
+
+
+async def contexto_del_dia(db, centros=None, hoy=None):
+    """Lo que está pasando ahora mismo, para que el chat conteste con datos reales."""
+    hoy_d = hoy or hoy_madrid()
+    hoy_str = fecha_iso(hoy_d)
+    manana_str = fecha_iso(hoy_d + timedelta(days=1))
+
+    pendientes = await listar_tareas(db, estado="pendiente", limite=30)
+    ctx = {
+        "hoy": hoy_str,
+        "manana": manana_str,
+        "centros": list(centros or []),
+        "tareas_pendientes": [
+            {"centro": t.get("centro"), "fecha": t.get("fecha"), "tipo": t.get("tipo")}
+            for t in pendientes],
+        "preasignaciones": [],
+        "plantillas": [],
+    }
+    for centro in (centros or [])[:6]:
+        for fecha in (hoy_str, manana_str):
+            pre = await obtener_preasignacion(db, fecha, centro)
+            if pre and pre.get("pares"):
+                ctx["preasignaciones"].append(
+                    {"centro": centro, "fecha": fecha, "pares": pre["pares"]})
+        try:
+            p = await construir_plantilla(db, hoy_str, centro)
+        except Exception as e:
+            logger.warning("tareas_ia: no pude montar la plantilla de %s: %s", centro, e)
+            continue
+        if p.get("listo"):
+            ctx["plantillas"].append({"centro": centro, "fecha": hoy_str,
+                                      "texto": p["texto"][:4000]})
+    return ctx
+
+
+def _contexto_texto(ctx):
+    """El contexto en texto, para meterlo en el prompt."""
+    partes = [f"HOY es {etiqueta_fecha(ctx['hoy'])}. Mañana es {etiqueta_fecha(ctx['manana'])}.",
+              "Centros del usuario: " + (", ".join(ctx["centros"]) or "(sin centros)")]
+
+    if ctx["tareas_pendientes"]:
+        partes.append("ENCARGOS PROGRAMADOS (se ejecutan solos):\n" + "\n".join(
+            f"  · {t['tipo']} de {t['centro']} para {etiqueta_fecha(t['fecha'])}"
+            for t in ctx["tareas_pendientes"]))
+    else:
+        partes.append("ENCARGOS PROGRAMADOS: ninguno.")
+
+    for pre in ctx["preasignaciones"]:
+        partes.append(
+            f"FURGONETAS APUNTADAS para {pre['centro']} el {etiqueta_fecha(pre['fecha'])} "
+            f"({len(pre['pares'])}):\n" + "\n".join(
+                f"  · {p['conductor']} → {formato_matricula(p['matricula'])}"
+                for p in pre["pares"][:60]))
+
+    for pl in ctx["plantillas"]:
+        partes.append(f"PLANTILLA DE HOY ({pl['centro']}), datos reales de Cortex:\n" + pl["texto"])
+
+    return "\n\n".join(partes)
+
+
+def prompt_chat(ctx, historial, texto):
+    """El prompt del chat de la app. Aquí es donde antes decía 'no puedo'."""
+    conversacion = ""
+    for m in (historial or [])[-12:]:
+        quien = "Dispatcher" if m.get("rol") == "dispatcher" else "Tú"
+        conversacion += f"{quien}: {m.get('texto', '')}\n"
+
+    return f"""Eres FlotaDSP AI, el asistente de una empresa de reparto (DSP de Amazon).
+Hablas con un dispatcher de la empresa, en castellano, al grano y sin rodeos.
+Tono de compañero de trabajo: frases cortas, nada de relleno ni de disculpas largas.
+
+LO QUE SÍ PUEDES HACER (no lo niegues nunca, ya está montado y funcionando):
+  · Aceptar encargos para más tarde. "Monta la plantilla de DGA1 mañana cuando
+    salgan las rutas en Cortex" queda programado y se ejecuta SOLO en cuanto las
+    rutas de ese día están subidas. Hay un proceso de fondo que lo revisa cada
+    10 minutos, aunque nadie esté escribiendo en el chat.
+  · Recordar. Esta conversación se guarda: lo de antes no se pierde.
+  · Guardar las furgonetas de un día concreto (pares conductor → matrícula) y
+    cruzarlas con los conductores que saque Cortex al montar la plantilla.
+  · Decir qué hay programado y cancelarlo.
+Si el dispatcher te pide una de esas cosas, NO expliques cómo funciona: ya se ha
+hecho antes de llegar a ti. Aquí solo estás conversando o respondiendo dudas.
+
+REGLAS (importantes):
+  · No inventes NUNCA una matrícula, un conductor, una ruta ni un dato. Si no
+    está en el CONTEXTO de abajo, di que no lo tienes y pide el dato.
+  · Nada de datos de otras empresas, de otros usuarios ni de fuera de los
+    centros de este usuario. Nada que le meta en un lío legal o laboral.
+  · Si falta el día o el centro para hacer algo, pregúntalo.
+  · Si algo no se puede hacer todavía, dilo claro en una frase. Sin inventar.
+
+=== CONTEXTO REAL AHORA MISMO ===
+{_contexto_texto(ctx)}
+
+=== CONVERSACIÓN ===
+{conversacion}Dispatcher: {texto}
+
+Responde solo como FlotaDSP AI, sin prefijos ni comillas."""
+
+
+async def responder_chat(db, texto, historial=None, centro=None, centros=None, usuario=None,
+                         notificar=None, gemini=None, hoy=None):
+    """Una vuelta del chat de la app.
+
+    Primero intenta hacer algo de verdad (programar, guardar furgonetas, montar
+    la plantilla, consultar, cancelar). Si el mensaje no era una orden de esas,
+    contesta con Gemini, pero con los datos reales del día delante.
+    """
+    r = await procesar_mensaje(db, texto, centro=centro, centros=centros, usuario=usuario,
+                               notificar=notificar, hoy=hoy, registrar=False)
+    if r.get("accion") is not None:
+        return r                      # se ha hecho algo real: esa es la respuesta
+
+    if gemini:
+        try:
+            # Con un centro claro se mira solo ese: montar la plantilla de todos
+            # en cada mensaje sería mucho trabajo para nada.
+            ctx = await contexto_del_dia(db, centros=([centro] if centro else centros), hoy=hoy)
+            respuesta = (await gemini(prompt_chat(ctx, historial, texto)) or "").strip()
+            if respuesta:
+                return {"accion": "conversacion", "datos": {}, "respuesta": respuesta}
+            logger.warning("tareas_ia: la IA devolvió una respuesta vacía")
+        except Exception as e:
+            logger.warning("tareas_ia: la IA no contestó: %s", e)
+
+    # Sin IA disponible: se responde con la verdad y queda registrado
+    pet = await registrar_peticion(db, texto, centro=centro, usuario=usuario, motivo="sin_ia")
+    r["datos"] = {"peticion": pet}
+    return r
+
+
+
+# =============================================================================
 # API — se engancha al server con construir_router(...)
 # =============================================================================
 
-def construir_router(db, dependencia_admin, notificar=None):
+def construir_router(db, dependencia_admin, notificar=None, gemini=None):
     """Devuelve el APIRouter de /api/ia listo para incluir en la app.
 
     db: la base (o el proxy multi-tenant) del server.
     dependencia_admin: la dependencia de autenticación del server (require_admin).
     notificar: async (titulo, mensaje) → aviso por Telegram. Opcional.
+    gemini: async (prompt) → texto. Lo pone el server; sin él, el chat solo
+            responde a las órdenes que sabe ejecutar (no conversa).
     """
     from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
@@ -1169,5 +1346,41 @@ def construir_router(db, dependencia_admin, notificar=None):
     async def capacidades(usuario=Depends(dependencia_admin)):
         return {"success": True, "centros": await _centros(usuario),
                 "texto": texto_capacidades(await _centros(usuario))}
+
+    @router.post("/chat")
+    async def chat(payload: dict = Body(...), usuario=Depends(dependencia_admin)):
+        """El chat de la app. Hace lo que le piden y, si no, conversa con datos reales.
+
+        Body: {"texto": "...", "centro": "opcional", "conversacion": "opcional"}
+        Devuelve {"respuesta": "...", "accion": "...", "conversacion": "..."}.
+        """
+        texto = (payload.get("texto") or payload.get("mensaje") or "").strip()
+        if not texto:
+            raise HTTPException(status_code=400, detail="Falta el texto del mensaje")
+        centro = payload.get("centro") or None
+        _exigir_acceso(usuario, centro)
+
+        conv_id = str(payload.get("conversacion") or id_conversacion(usuario))[:120]
+        historial = payload.get("historial")
+        if historial is None:
+            historial = await historial_chat(db, conv_id)
+
+        r = await responder_chat(db, texto, historial=historial, centro=centro,
+                                 centros=await _centros(usuario), usuario=usuario,
+                                 notificar=notificar, gemini=gemini)
+        await guardar_turno(db, conv_id, texto, r.get("respuesta"), usuario=usuario)
+        return {"success": True, "conversacion": conv_id, **r}
+
+    @router.get("/chat/historial")
+    async def ver_historial(conversacion: str = Query(None), usuario=Depends(dependencia_admin)):
+        conv_id = str(conversacion or id_conversacion(usuario))[:120]
+        return {"success": True, "conversacion": conv_id,
+                "mensajes": await historial_chat(db, conv_id)}
+
+    @router.delete("/chat/historial")
+    async def limpiar_historial(conversacion: str = Query(None), usuario=Depends(dependencia_admin)):
+        conv_id = str(conversacion or id_conversacion(usuario))[:120]
+        n = await borrar_historial(db, conv_id)
+        return {"success": True, "borradas": n}
 
     return router

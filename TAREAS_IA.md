@@ -54,15 +54,42 @@ La furgoneta sale **siempre de un dato real**, en este orden:
 | GET/POST/DELETE | `/api/ia/preasignacion?centro=&fecha=` | Las furgonetas del día. |
 | GET | `/api/ia/peticiones` | Lo que se pidió y aún no sabe hacer. |
 | GET | `/api/ia/capacidades` | Texto listo para meter en el prompt del chat. |
+| POST | `/api/ia/chat` | **El chat entero**: ejecuta la orden o conversa con los datos del día. |
+| GET/DELETE | `/api/ia/chat/historial` | La memoria de la conversación. |
 
-## Enganchar el chat
+## El chat de la app
 
-El chat solo tiene que hacer dos cosas:
+`POST /api/ia/chat` es el chat entero, ya montado. El chat de la app solo tiene
+que apuntar ahí: **no hace falta tocarle el prompt**, lo lleva dentro.
 
-1. Meter en su prompt el texto de `GET /api/ia/capacidades`, para que sepa que
-   **sí** puede aceptar encargos para mañana (antes lo rechazaba).
-2. Mandar el mensaje del dispatcher a `POST /api/ia/comando` y soltar el campo
-   `respuesta` tal cual.
+```js
+const r = await fetch("/api/ia/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+  body: JSON.stringify({ texto: loQueEscribio })   // centro y conversacion son opcionales
+});
+const { respuesta } = await r.json();              // se pinta tal cual
+```
+
+Qué hace en cada mensaje:
+
+1. **¿Es una orden que sabe ejecutar?** (programar la plantilla, guardar las
+   furgonetas del día, montarla, consultar, cancelar) → la ejecuta de verdad y
+   devuelve la respuesta. La IA ni se entera.
+2. **¿Es una pregunta o una conversación?** → contesta con Gemini, pero con los
+   datos reales del día delante: la plantilla de hoy, las furgonetas apuntadas y
+   los encargos programados. Y con el prompt que le dice que **sí** puede
+   aceptar encargos para mañana, que era justo lo que antes rechazaba.
+3. **Memoria**: cada dispatcher tiene su conversación guardada
+   (`ia_conversaciones`, últimos 40 mensajes). Se consulta con
+   `GET /api/ia/chat/historial` y se borra con `DELETE`.
+
+Sin `GEMINI_API_KEY` el chat sigue funcionando para las órdenes; para lo demás
+dice la verdad y lo registra en `/api/ia/peticiones`.
+
+Si prefieres dejar el chat como está y solo darle las nuevas capacidades,
+`POST /api/ia/comando` hace el paso 1 solo, y `GET /api/ia/capacidades` te da el
+texto para meter en el prompt que ya tengas.
 
 ## Límites, a propósito
 
