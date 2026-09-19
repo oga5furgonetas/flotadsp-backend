@@ -27762,11 +27762,27 @@ async def _drivers_sin_transporter(dias: int = 30) -> dict:
             n, t = (g.get("nombre") or "").strip(), g.get("transporterId")
             if n and t:
                 porNombre.setdefault(_tr_nombre(n), set()).add(t)
+    # Y el roster de Programacion: ID y nombre de todo el que tiene turno, de la
+    # misma fuente (Amazon). Cubre a gente que Cortex no ha visto repartir aun.
+    async for d in db[_WHC_API_COL].find(
+            {}, {"_id": 0, "conductores.transporter_id": 1, "conductores.nombre": 1}
+    ).sort("week", -1).limit(9):
+        for g in d.get("conductores") or []:
+            n, t = (g.get("nombre") or "").strip(), (g.get("transporter_id") or "").strip()
+            if n and t:
+                porNombre.setdefault(_tr_nombre(n), set()).add(t)
 
     fichas = await db.drivers.find(
         {"status": {"$nin": ["deleted", "baja"]}},
         {"_id": 0, "id": 1, "name": 1, "center": 1, "transporter_id": 1,
-         "email": 1}).to_list(2000)
+         "driver_id": 1, "email": 1}).to_list(2000)
+    # EL ID VIVE EN DOS CAMPOS (gotcha 79): una ficha con el ID solo en
+    # `driver_id` YA lo tiene. Ponerle otro en `transporter_id` le dejaba dos
+    # IDs de Amazon distintos, que es como se rompio la de Alberto Vazquez.
+    for f in fichas:
+        if not f.get("transporter_id") and _DIA_TID.match(
+                str(f.get("driver_id") or "").strip().upper()):
+            f["transporter_id"] = str(f["driver_id"]).strip().upper()
     # DOS FICHAS DEL MISMO CORREO SON LA MISMA PERSONA, no un tocayo. Es la
     # regla de `_fichas_misma_persona` (gotcha 15) y aqui cambia el resultado:
     # de los 8 nombres repetidos que Cortex ve con un unico id, los 8 comparten
@@ -32582,9 +32598,33 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         e["pod_fails"] = e.get("pod_fails", 0) + (r.get("pod_fails") or 0)
         e["cc_fails"] = e.get("cc_fails", 0) + (r.get("cc_fails") or 0)
 
+    # LO QUE AMAZON DICE de cada ID cuyo nombre sale de una FICHA. Sin esto un ID
+    # mal puesto no se distingue de uno bueno: el nombre aparece igual de seguro y
+    # los defectos de una persona se le cuelgan a otra (19-09-2026).
+    verif: dict = {}
+    con_ficha = {tid for tid in por_tid if (nombres.get(tid) or {}).get("id")}
+    if con_ficha:
+        amazon = await _amazon_nombres(con_ficha)
+        vs = _ids_veredictos(
+            [{"id": nombres[tid]["id"], "name": nombres[tid]["name"], "transporter_id": tid}
+             for tid in con_ficha], amazon, await _ids_confirmados())
+        verif = {v["transporter_id"]: v for v in vs}
+        if any(v["estado"] == "no_coincide" for v in vs):
+            _ids_proponer(vs, await db.drivers.find(
+                {"status": {"$nin": ["deleted", "fusionada"]}, "merged_into": {"$exists": False}},
+                {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1,
+                 "transporter_id": 1, "driver_id": 1}).to_list(3000))
+
     salida = []
     for tid, e in por_tid.items():
         n = nombres.get(tid)
+        v = verif.get(tid)
+        if v:
+            e["verif"] = v["estado"]
+            if v["estado"] in ("no_coincide", "parecido", "discrepan"):
+                e["amazon_nombre"] = v["amazon_nombre"]
+            if v.get("propuesta"):
+                e["propuesta"] = v["propuesta"]
         e["driver_name"] = n["name"] if n else ""
         e["driver_id"] = (n or {}).get("id")
         e["solo_historial"] = bool((n or {}).get("solo_historial"))
@@ -32707,34 +32747,89 @@ async def asignar_id_conductor(data: dict = Body(...), user: dict = Depends(requ
 
     `driver_id` vacio QUITA el id de quien lo tuviera: hace falta para arreglar
     uno mal puesto sin tener que ir a la ficha.
+
+    LO QUE SE AÑADIO EL 19-09-2026, cuando se colgo el ID de Alberto Brion
+    Pineiro a Alberto Vazquez Arias desde el desplegable y no hubo forma de
+    deshacerlo:
+      · el ID vive en DOS campos de la ficha (gotcha 79) y «quitar» solo vaciaba
+        `transporter_id`: si estaba en `driver_id` se contestaba «ok, quitado de
+        0» y todo seguia igual. Ahora se quita de los dos;
+      · si Amazon dice que ese ID es OTRA persona, no se asigna en silencio: 409
+        con lo que dice Amazon. Quien sepa que es correcto lo repite con
+        `forzar: true`, que es una decision consciente;
+      · cada cambio guarda como estaba antes (`transporter_id_cambios`).
     """
     tid = str(data.get("transporter_id") or "").strip().upper()
     if not _DIA_TID.match(tid):
         raise HTTPException(400, "Ese no parece un Transporter ID")
     did = str(data.get("driver_id") or "").strip()
+    forzar = data.get("forzar") is True
+    quien = user.get("name") or user.get("sub") or "oficina"
+
+    async def _antes(excepto=None):
+        """Que fichas tienen ese ID y en que campo, para poder deshacerlo."""
+        filtro = {"$or": [{"transporter_id": tid}, {"driver_id": tid}]}
+        if excepto:
+            filtro["id"] = {"$ne": excepto}
+        return [{"ficha_id": f["id"], "ficha": f.get("name"),
+                 "campos": [c for c in ("transporter_id", "driver_id")
+                            if str(f.get(c) or "").strip().upper() == tid]}
+                async for f in db.drivers.find(
+                    filtro, {"_id": 0, "id": 1, "name": 1, "transporter_id": 1, "driver_id": 1})]
+
+    async def _quitar(fichas):
+        for x in fichas:
+            await db.drivers.update_one({"id": x["ficha_id"]},
+                                        {"$unset": {c: "" for c in x["campos"]}})
+
+    async def _apunte(antes, despues):
+        try:
+            await db.transporter_id_cambios.insert_one({
+                "en": datetime.now(timezone.utc).isoformat(), "por": quien,
+                "transporter_id": tid, "antes": antes, "despues": despues})
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("No se pudo apuntar el cambio de %s: %s", tid, e)
 
     if not did:
-        r = await db.drivers.update_many({"transporter_id": tid},
-                                         {"$unset": {"transporter_id": ""}})
-        return {"ok": True, "quitado_de": r.modified_count}
+        antes = await _antes()
+        await _quitar(antes)
+        await _apunte(antes, None)
+        return {"ok": True, "quitado_de": len(antes),
+                "quitado_a": [x["ficha"] for x in antes]}
 
-    drv = await db.drivers.find_one({"id": did}, {"_id": 0, "id": 1, "name": 1, "center": 1})
+    drv = await db.drivers.find_one({"id": did}, {"_id": 0, "id": 1, "name": 1, "center": 1,
+                                                  "transporter_id": 1, "driver_id": 1})
     if not drv:
         raise HTTPException(404, "Ese conductor no existe")
     if not _user_can_see_center(user, drv.get("center") or ""):
         raise HTTPException(403, "Ese conductor es de otro centro")
 
+    if not forzar:
+        am = (await _amazon_nombres({tid})).get(tid)
+        if (am and (am["roster"] or am["votos"] >= 2) and not am["discrepan"]
+                and _nombres_veredicto(drv["name"], am["nombre"]) == "no"):
+            raise HTTPException(
+                409, "Amazon dice que %s es «%s», no «%s»." % (tid, am["nombre"], drv["name"]))
+        propio = [str(drv.get(c) or "").strip().upper() for c in ("transporter_id", "driver_id")]
+        otro = next((p for p in propio if p and p != tid and _DIA_TID.match(p)), "")
+        if otro:
+            raise HTTPException(
+                409, "«%s» ya tiene otro ID de Amazon (%s). Con este tendria dos." % (
+                    drv["name"], otro))
+
     # Un id no puede estar en dos fichas: se quita de donde estuviera antes.
     # Si no, la busqueda por transporter_id devolveria dos y el nombre que
     # saliera dependeria del orden en que Mongo los tuviera guardados.
-    await db.drivers.update_many({"transporter_id": tid, "id": {"$ne": did}},
-                                 {"$unset": {"transporter_id": ""}})
+    antes = await _antes(excepto=did)
+    await _quitar(antes)
     await db.drivers.update_one({"id": did}, {"$set": {"transporter_id": tid}})
+    await _apunte(antes, {"ficha_id": did, "ficha": drv["name"]})
     # Y si el id estaba puesto como etiqueta suelta, sobra: manda la ficha.
     await db.app_meta.update_one({"_id": "transporter_alias"},
                                  {"$unset": {f"mapa.{tid}": ""}})
-    logger.info("Transporter ID %s asignado a %s", tid, drv["name"])
-    return {"ok": True, "driver_name": drv["name"], "transporter_id": tid}
+    logger.info("Transporter ID %s asignado a %s (%s)", tid, drv["name"], quien)
+    return {"ok": True, "driver_name": drv["name"], "transporter_id": tid,
+            "quitado_a": [x["ficha"] for x in antes]}
 
 
 @api_router.post("/diarios/ids")
@@ -37184,59 +37279,180 @@ def _hm_desde_medianoche(minutos) -> str:
     return "%d:%02d%s" % (h12, mm, ampm)
 
 
-def _horarios_conductores(rosters: dict, hoy: str) -> list:
+def _iso_a_ms(iso) -> int:
+    """Un instante ISO 8601 a milisegundos epoch; 0 si no se puede leer."""
+    try:
+        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return int(d.timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _dia_de_ms(ms: int) -> str:
+    """El dia (YYYY-MM-DD) de Espana en el que cae un instante epoch."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.fromtimestamp(ms / 1000, ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+    except Exception:                                            # noqa: BLE001
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d")
+
+
+def _whc_num(v, defecto=0):
+    """Un numero de la respuesta de Amazon, o `defecto` si viene vacio o roto."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return defecto
+    return v
+
+
+def _whc_reservas(c: dict) -> list:
+    """Las reservas de UNA persona tal cual las da Amazon, sin interpretar.
+
+    Se guardan asi y se INTERPRETAN AL LEER (`_whc_clasificar`), no al recibirlas.
+    Lo que es «un dia que aun no ha llegado» depende de CUANDO se mira: si se
+    clasifica al recibir y la captura tiene tres horas, el hoy de entonces sigue
+    siendo «pendiente» aunque ya haya pasado, y la proyeccion se infla.
+    """
+    fuera = []
+    for dia, lista in sorted((c.get("reservationsMap") or {}).items()):
+        for r in (lista or []):
+            if not isinstance(r, dict):
+                continue
+            fuera.append({
+                "dia": str(dia)[:10],
+                "dur": int(_whc_num(r.get("durationInMinutes"))),
+                "ini": _whc_num(r.get("startTimeInMinutes"), None),
+                "ini_ep": _whc_num(r.get("startTimeInEpoch"), None),
+                "ci": _whc_num(r.get("clockInEpoch"), None),
+                "co": _whc_num(r.get("clockOutEpoch"), None),
+                "st": _texto_cuerpo(r.get("status"), 20).upper(),
+                "tipo": _texto_cuerpo(r.get("serviceTypeName"), 40),
+            })
+    return fuera
+
+
+def _whc_clasificar(reservas: list, hoy: str, captura_ms: int, ahora_ms: int = None) -> dict:
+    """De las reservas crudas a lo que se puede AFIRMAR y lo que solo se PROYECTA.
+
+    El 19-09-2026 la pantalla decia «18 ya pasados» en OGA5 y solo 2 lo eran:
+    el bloque EN CURSO se sumaba por su duracion PLANIFICADA (9 h enteras) como si
+    ya estuviera hecho. 24 personas de 160 salian con la semana pasada sin
+    haberla pasado, y a quien se le decia «te pasaste» no se habia pasado.
+
+    Cuatro cosas distintas, que antes iban en el mismo saco:
+
+      · CERRADO   entrada y salida fichadas: dura lo que dice el fichaje. Hecho.
+      · EN CURSO  entrada sin salida y es HOY: vale lo que lleva desde que entro
+                  hasta la captura (un suelo cierto), y lo que le falta hasta lo
+                  planificado va a la proyeccion.
+      · SIN SALIDA entrada sin salida en un dia YA PASADO: trabajo hubo, pero no
+                  sabemos cuanto duro. No se afirma: se cuenta aparte y se dice.
+      · PENDIENTE un dia que aun no ha llegado, o la hora de hoy que aun no paso.
+                  Un dia PASADO sin entrada fichada NO es pendiente (no vendra):
+                  contarlo inflaba la proyeccion de quien falto o libraba.
+    """
+    if ahora_ms is None:
+        ahora_ms = int(time.time() * 1000)
+    bloques = []
+    cerrado = hecho_curso = plan_curso = sin_salida = pend = 0
+    n_sin_salida = n_pend = n_sin_fichar = 0
+    for r in sorted(reservas or [], key=lambda x: (x.get("dia") or "", x.get("ini") or 0)):
+        dia, dur = r.get("dia") or "", max(0, int(r.get("dur") or 0))
+        ci, co, ini = r.get("ci"), r.get("co"), r.get("ini")
+        base = {"dia": dia, "inicio": _hm_desde_medianoche(ini),
+                "tipo": r.get("tipo") or ""}
+        if ci and co and co > ci:
+            minutos = int((co - ci) / 60000)
+            cerrado += minutos
+            bloques.append({**base, "fin": _hm_desde_medianoche((ini or 0) + minutos),
+                            "minutos": minutos, "estimado": False,
+                            "en_curso": False, "sin_salida": False})
+        elif ci and dia >= hoy:
+            hecho = max(0, int((captura_ms - ci) / 60000))
+            hecho_curso += hecho
+            plan_curso += max(dur, hecho)
+            bloques.append({**base, "fin": "", "minutos": hecho, "estimado": False,
+                            "en_curso": True, "sin_salida": False})
+        elif ci:
+            sin_salida += dur
+            n_sin_salida += 1
+            # `estimado`: la duracion es la planificada, no la fichada, y por eso
+            # no puede acusar de una jornada larga.
+            bloques.append({**base, "fin": "", "minutos": dur, "estimado": True,
+                            "en_curso": False, "sin_salida": True})
+        else:
+            empieza = r.get("ini_ep")
+            por_venir = dia > hoy or (dia == hoy and (
+                not empieza or ahora_ms < empieza + dur * 60000))
+            # Solo lo ASIGNADO se cuenta: una reserva cancelada o rechazada no se
+            # va a trabajar.
+            if por_venir and r.get("st") in ("ASSIGNED", ""):
+                pend += dur
+                n_pend += 1
+            else:
+                n_sin_fichar += 1
+    return {
+        "bloques": bloques,
+        # Lo que se puede afirmar: cerrado + lo que lleva el bloque en curso.
+        "trabajado": cerrado + hecho_curso,
+        "trabajado_cerrado": cerrado,
+        "en_curso_min": hecho_curso,
+        "sin_salida_min": sin_salida,
+        "sin_salida_n": n_sin_salida,
+        "sin_fichar_n": n_sin_fichar,
+        # Lo que aun tiene por delante segun el cuadrante.
+        "planificado_restante": pend + max(0, plan_curso - hecho_curso),
+        "bloques_restantes": n_pend,
+        # Una PROYECCION, no un hecho: todo lo anterior mas lo planificado.
+        "proyeccion": cerrado + plan_curso + sin_salida + pend,
+    }
+
+
+def _whc_reservas_de_bloques(bloques: list, captura_ms: int) -> list:
+    """Reservas reconstruidas de un documento guardado con el formato de antes.
+
+    Solo se puede recuperar lo que ya se habia fichado: lo que faltaba por hacer
+    se guardo sumado y no se puede deshacer. Se marca para que la pantalla no
+    presente esa proyeccion como completa.
+    """
+    fuera = []
+    for b in bloques or []:
+        if not isinstance(b, dict):
+            continue
+        m = int(_whc_num(b.get("minutos")))
+        r = {"dia": b.get("dia") or "", "dur": m, "ini": None, "ini_ep": None,
+             "ci": max(1, captura_ms - m * 60000), "co": None, "st": "", "tipo": b.get("tipo") or ""}
+        if not b.get("en_curso"):
+            r["co"] = r["ci"] + m * 60000
+        else:
+            r["ci"] = captura_ms          # en curso: no sabemos cuanto lleva
+        fuera.append(r)
+    return fuera
+
+
+def _horarios_conductores(rosters: dict, hoy: str, ahora_ms: int = None) -> list:
     """Del roster de Amazon a la forma que ya sabe evaluar `_whc_evaluar`.
 
-    TRABAJADO vs PLANIFICADO, que es la distincion que lo hace util:
-      · un bloque con entrada Y salida fichadas -> lo que duro de verdad;
-      · uno con entrada y sin salida -> esta en ello ahora: cuenta lo planificado
-        y se marca `en_curso`;
-      · uno de un dia que aun no ha llegado -> NO cuenta como trabajado, cuenta
-        como lo que le queda por hacer.
-    Meter los tres en el mismo saco es lo que hacia que alguien que no ha
-    empezado la semana pareciera que la lleva hecha.
+    Se guardan las reservas CRUDAS (`reservas`) y ademas la clasificacion hecha
+    con el momento de la captura, que es la que usan los consumidores antiguos.
+    La pantalla vuelve a clasificar al leer, con el «hoy» de ese momento.
+
+    `transporter_id` es `driverPersonId`, el ID de Amazon de la persona (A2...),
+    con el NOMBRE que Amazon le da. Es la fuente contra la que se comprueban las
+    fichas: `driverProviderId` es otra cosa (un identificador interno del
+    proveedor) y NO es el que se pega en Cortex ni en los diarios.
     """
+    if ahora_ms is None:
+        ahora_ms = int(time.time() * 1000)
     fuera = []
     for c in (rosters or {}).get("data") or []:
         if not isinstance(c, dict):
             continue
-        bloques, trabajado, pendiente, dias_pend = [], 0, 0, 0
-        for dia in sorted((c.get("reservationsMap") or {})):
-            for r in (c["reservationsMap"][dia] or []):
-                if not isinstance(r, dict):
-                    continue
-                dur = r.get("durationInMinutes") or 0
-                ci, co = r.get("clockInEpoch"), r.get("clockOutEpoch")
-                futuro = dia > hoy
-                if ci and co and co > ci:
-                    minutos = int((co - ci) / 60000)
-                    en_curso = False
-                elif ci:
-                    minutos = int(dur)
-                    en_curso = True
-                else:
-                    minutos = int(dur)
-                    en_curso = False
-                if futuro or not ci:
-                    pendiente += int(dur)
-                    dias_pend += 1
-                    continue
-                trabajado += minutos
-                ini = r.get("startTimeInMinutes")
-                bloques.append({
-                    "dia": dia,
-                    "inicio": _hm_desde_medianoche(ini),
-                    "fin": ("" if en_curso else _hm_desde_medianoche(
-                        (ini or 0) + minutos)),
-                    "minutos": minutos,
-                    # NUNCA estimado: lo da Amazon. Es lo que quita de golpe los
-                    # avisos falsos de jornadas de dieciocho horas.
-                    "estimado": False,
-                    "en_curso": en_curso,
-                    "tipo": _texto_cuerpo(r.get("serviceTypeName"), 40),
-                })
-        if not bloques and not pendiente:
+        reservas = _whc_reservas(c)
+        if not reservas:
             continue
+        cl = _whc_clasificar(reservas, hoy, ahora_ms, ahora_ms)
         # `driverName` va al nivel de arriba (comprobado contra el esquema
         # real capturado el 17-09-2026: `confidentialFields` no existe en
         # este objeto — solo dentro de `shiftAssignmentsMap`, que es otra
@@ -37250,12 +37466,11 @@ def _horarios_conductores(rosters: dict, hoy: str) -> list:
         fuera.append({
             "nombre": nombre,
             "driver_id": _texto_cuerpo(c.get("driverProviderId"), 80),
+            "transporter_id": _texto_cuerpo(c.get("driverPersonId"), 40),
             "estado": _texto_cuerpo(c.get("driverOperationalStatus"), 20),
-            "trabajado": trabajado,
             "trabajado_origen": "amazon",
-            "planificado_restante": pendiente,
-            "bloques_restantes": dias_pend,
-            "bloques": bloques,
+            "reservas": reservas,
+            **cl,
         })
     return fuera
 
@@ -38808,6 +39023,8 @@ async def cortex_ingest_informe(request: Request):
                 {"$set": {"center": nave,
                           "week": _texto_cuerpo(carga.get("desde"), 12),
                           "hasta": _texto_cuerpo(carga.get("hasta"), 12),
+                          # v2: lleva las reservas crudas y se clasifica al LEER.
+                          "v": 2,
                           "conductores": gente,
                           # Los umbrales que dice AMAZON, no los que suponiamos.
                           "leap": {k: v for k, v in leap.items()
@@ -41825,6 +42042,18 @@ async def _cx_nombres_resumen(ids: set, dias: int = 60) -> dict:
     fuera: dict = {}
     if not faltan:
         return fuera
+    # El roster de Programacion trae ID y nombre de TODO el que tiene turno esta
+    # semana, y es lo mas directo que da Amazon: se mira primero.
+    async for d in db[_WHC_API_COL].find(
+            {}, {"_id": 0, "conductores.transporter_id": 1, "conductores.nombre": 1}
+    ).sort("week", -1).limit(9):
+        for g in d.get("conductores") or []:
+            tid = (g.get("transporter_id") or "").strip()
+            nombre = re.sub(r"\s+", " ", str(g.get("nombre") or "")).strip()
+            if tid in faltan and nombre and tid not in fuera:
+                fuera[tid] = nombre
+    if len(fuera) == len(faltan):
+        return fuera
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
     async for d in db.cortex_resumen.find({"dia": {"$gte": desde}},
                                           {"_id": 0, "gente": 1}).sort("dia", -1):
@@ -41883,6 +42112,262 @@ async def _cx_nombres(ids: set) -> dict:
             mapa[tid] = {"nombre": nombre, "ficha_id": None, "activo": True,
                          "origen": "historico"}
     return mapa
+
+
+# ─── LO QUE AMAZON DICE QUE ES CADA TRANSPORTER ID ──────────────────────────
+#
+# Una ficha con un Transporter ID puesto NO ES una ficha verificada: el ID lo
+# puso una persona, a veces desde un desplegable, y el 19-09-2026 salio uno
+# cambiado —el de Alberto Brion Pineiro colgado en Alberto Vazquez Arias—, con
+# la particularidad de que la pantalla no daba ninguna pista de que estaba mal.
+# Un ID mal puesto le cuelga los defectos de una persona a otra y el numero
+# siempre parece razonable.
+#
+# Lo que SI da pistas es que Amazon publica la pareja (ID, nombre) por otros
+# caminos que no pasan por nuestras fichas:
+#   · el roster de Programacion (`whc_api`): `driverPersonId` + `driverName`;
+#   · el resumen diario de Cortex (`cortex_resumen.gente`);
+#   · el historial de rutas (`route_history`).
+# Se contrastan las fichas contra eso. Nada se corrige solo: el desacuerdo se
+# ENSENA y decide una persona (o confirma que esta bien, y no vuelve a salir).
+
+def _nombres_veredicto(a: str, b: str):
+    """¿Son el mismo nombre? "si" | "parcial" | "no" | None (no se puede saber).
+
+    Se comparan las PALABRAS (el orden de apellidos cambia de un sitio a otro y
+    unos ponen el segundo apellido y otros no) y cada palabra admite una errata:
+    'Birichinag' y 'Birichinaga' son la misma. `None` cuando alguno de los dos
+    tiene menos de dos palabras: con una sola no hay forma de afirmar nada.
+
+      · "si"      todas las palabras del nombre mas corto estan en el otro;
+      · "parcial" difieren en UNA palabra (un apellido distinto);
+      · "no"      comparten una palabra o ninguna. Compartir un nombre de pila
+                  (ALBERTO, JOSE MANUEL) no hace a dos personas la misma.
+    """
+    import difflib
+    pa, pb = _palabras_nombre(a), _palabras_nombre(b)
+    if len(pa) < 2 or len(pb) < 2:
+        return None
+
+    def _esta(x, conjunto):
+        return any(x == y or (len(x) > 3 and len(y) > 3
+                              and difflib.SequenceMatcher(None, x, y).ratio() >= 0.85)
+                   for y in conjunto)
+    comunes = sum(1 for x in pa if _esta(x, pb))
+    corto = min(len(pa), len(pb))
+    if comunes >= corto:
+        return "si"
+    if comunes >= 2 and comunes >= corto - 1:
+        return "parcial"
+    return "no"
+
+
+async def _amazon_nombres(ids: set, dias: int = 90) -> dict:
+    """transporterId -> lo que Amazon dice que es, votado entre sus fuentes.
+
+    Devuelve `{tid: {"nombre", "votos", "roster", "discrepan"}}`. El nombre es el
+    mas votado; `roster` dice si viene del roster de Programacion (la fuente
+    mas directa: cuenta triple); `discrepan` es True si otra fuente da OTRA
+    persona con al menos dos votos — entonces no se afirma nada.
+    """
+    ids = {str(i).strip().upper() for i in (ids or ()) if i}
+    if not ids:
+        return {}
+    votos: dict = {}
+    roster: set = set()
+
+    def _voto(tid, nombre, peso=1, del_roster=False):
+        tid = str(tid or "").strip().upper()
+        nombre = re.sub(r"\s+", " ", str(nombre or "")).strip()
+        if tid not in ids or not nombre:
+            return
+        e = votos.setdefault(tid, {}).setdefault(_clave_nombre(nombre), [0, nombre])
+        e[0] += peso
+        if del_roster:
+            roster.add(tid)
+
+    # 1) El roster de Programacion: ID y nombre, de Amazon, de esta semana.
+    async for d in db[_WHC_API_COL].find(
+            {}, {"_id": 0, "conductores.transporter_id": 1, "conductores.nombre": 1}
+    ).sort("week", -1).limit(9):
+        for g in d.get("conductores") or []:
+            _voto(g.get("transporter_id"), g.get("nombre"), 3, True)
+    # 2) El resumen diario de Cortex: un voto por dia visto.
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    async for d in db.cortex_resumen.find({"dia": {"$gte": desde}}, {"_id": 0, "gente": 1}):
+        for g in d.get("gente") or []:
+            _voto(g.get("transporterId"), g.get("nombre"))
+    # 3) El historial de rutas: par (id, nombre) tal cual lo da Amazon.
+    async for r in db.route_history.aggregate([
+            {"$match": {"transporter_id": {"$in": sorted(ids)},
+                        "driver_name": {"$nin": [None, ""]}}},
+            {"$group": {"_id": {"t": "$transporter_id", "n": "$driver_name"},
+                        "c": {"$sum": 1}}}]):
+        _voto(r["_id"].get("t"), r["_id"].get("n"), min(int(r.get("c") or 1), 3))
+
+    fuera = {}
+    for tid, nombres in votos.items():
+        orden = sorted(nombres.values(), key=lambda x: (-x[0], x[1]))
+        top = orden[0]
+        # Otra PERSONA con peso propio: no es una errata del mismo nombre.
+        otra = any(n[0] >= 2 and _nombres_veredicto(top[1], n[1]) == "no" for n in orden[1:])
+        fuera[tid] = {"nombre": top[1], "votos": top[0], "roster": tid in roster,
+                      "discrepan": otra}
+    return fuera
+
+
+def _ids_veredictos(fichas: list, amazon: dict, confirmados: dict) -> list:
+    """Cada (ficha, ID) contra el nombre que Amazon da a ese ID.
+
+    estado:
+      · confirmado   una persona dijo «esta bien» para ESA pareja
+      · coincide     el nombre de la ficha es el de Amazon
+      · parecido     difieren en un apellido: revisar, sin alarma
+      · no_coincide  son personas distintas. Solo se dice con evidencia firme:
+                     el roster, o al menos dos votos y ninguna fuente discrepando
+      · discrepan    las fuentes de Amazon no se ponen de acuerdo entre si
+      · sin_dato     Amazon no da nombre para ese ID, o es demasiado corto para
+                     comparar. NO es un «esta bien»
+    Y `ids_distintos` cuando la misma ficha tiene dos IDs de Amazon diferentes
+    (`driver_id` y `transporter_id`): uno de los dos esta mal.
+    """
+    fuera = []
+    for f in fichas:
+        ids = []
+        for campo in ("transporter_id", "driver_id"):
+            v = str(f.get(campo) or "").strip().upper()
+            if v and _DIA_TID.match(v) and v not in [i for i, _ in ids]:
+                ids.append((v, campo))
+        for tid, campo in ids:
+            a = amazon.get(tid)
+            if confirmados.get(tid) == f.get("id"):
+                estado, v = "confirmado", None
+            elif not a:
+                estado, v = "sin_dato", None
+            else:
+                v = _nombres_veredicto(f.get("name"), a["nombre"])
+                firme = a["roster"] or a["votos"] >= 2
+                if v == "si":
+                    estado = "coincide"
+                elif v is None:
+                    estado = "sin_dato"
+                elif a["discrepan"]:
+                    estado = "discrepan"
+                elif v == "parcial":
+                    estado = "parecido"
+                else:
+                    estado = "no_coincide" if firme else "sin_dato"
+            fuera.append({
+                "ficha_id": f.get("id"), "ficha": f.get("name") or "",
+                "centro": f.get("center") or "", "de_baja": f.get("active") is False,
+                "transporter_id": tid, "campo": campo, "estado": estado,
+                "amazon_nombre": (a or {}).get("nombre") or "",
+                "amazon_votos": (a or {}).get("votos") or 0,
+                "amazon_roster": bool((a or {}).get("roster")),
+                "ids_distintos": len(ids) > 1,
+                "otro_id": next((i for i, _ in ids if i != tid), "")})
+    return fuera
+
+
+async def _ids_confirmados() -> dict:
+    d = await db.app_meta.find_one({"_id": "transporter_ids_confirmados"}) or {}
+    return dict(d.get("mapa") or {})
+
+
+def _ids_proponer(items: list, todas: list) -> None:
+    """A cada `no_coincide` le pone la ficha de la persona que Amazon dice, si el
+    nombre lleva a UNA sola. Con dos tocayos no se propone nada."""
+    for it in items:
+        if it["estado"] != "no_coincide":
+            continue
+        cand, motivo = _empareja_conductor(it["amazon_nombre"],
+                                           [x for x in todas if x.get("id") != it["ficha_id"]], {})
+        if cand and motivo in ("exacto", "palabras"):
+            tiene = [str(cand.get(c) or "").strip().upper() for c in ("transporter_id", "driver_id")]
+            it["propuesta"] = {"ficha_id": cand["id"], "nombre": cand.get("name") or "",
+                               "centro": cand.get("center") or "",
+                               # Si esa ficha ya tiene OTRO ID, moverselo seria
+                               # crear dos: se dice y no se propone sin mirar.
+                               "ya_tiene_otro_id": any(t and t != it["transporter_id"] for t in tiene)}
+
+
+@api_router.get("/transporter-ids/verificar")
+async def transporter_ids_verificar(center: Optional[str] = None, todo: bool = False,
+                                    user: dict = Depends(require_admin)):
+    """Las fichas con Transporter ID contrastadas con lo que dice Amazon.
+
+    Solo MIRA. Devuelve lo que no cuadra —y, con `todo`, tambien lo que si— para
+    que una persona decida: quitar el ID de esa ficha, moverlo a la persona que
+    es, o confirmar que esta bien (y no vuelve a salir).
+    """
+    filtro = {"status": {"$nin": ["deleted", "fusionada"]},
+              "merged_into": {"$exists": False}, **_filtro_centro(user, center)}
+    fichas = await db.drivers.find(
+        filtro, {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1,
+                 "transporter_id": 1, "driver_id": 1}).to_list(3000)
+    con_id = [f for f in fichas
+              if any(_DIA_TID.match(str(f.get(c) or "").strip().upper())
+                     for c in ("transporter_id", "driver_id"))]
+    ids = {str(f.get(c) or "").strip().upper() for f in con_id
+           for c in ("transporter_id", "driver_id")}
+    ids = {i for i in ids if _DIA_TID.match(i)}
+    amazon = await _amazon_nombres(ids)
+    items = _ids_veredictos(con_id, amazon, await _ids_confirmados())
+
+    # A quien es de verdad, si su nombre lleva a UNA sola ficha (misma regla que
+    # el resto: no se adivina con dos tocayos).
+    if any(it["estado"] == "no_coincide" for it in items):
+        _ids_proponer(items, await db.drivers.find(
+            {"status": {"$nin": ["deleted", "fusionada"]}, "merged_into": {"$exists": False}},
+            {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1,
+             "transporter_id": 1, "driver_id": 1}).to_list(3000))
+
+    cuenta: dict = {}
+    for it in items:
+        cuenta[it["estado"]] = cuenta.get(it["estado"], 0) + 1
+    orden = {"no_coincide": 0, "discrepan": 1, "parecido": 2, "sin_dato": 3,
+             "confirmado": 4, "coincide": 5}
+    items.sort(key=lambda x: (orden.get(x["estado"], 9), not x["ids_distintos"],
+                              x["ficha"].upper()))
+    revisar = [x for x in items if x["estado"] in ("no_coincide", "discrepan", "parecido")
+               or x["ids_distintos"]]
+    return {
+        "fichas_con_id": len(con_id), "ids": len(ids),
+        "resumen": {"coinciden": cuenta.get("coincide", 0) + cuenta.get("confirmado", 0),
+                    "no_coinciden": cuenta.get("no_coincide", 0),
+                    "parecidos": cuenta.get("parecido", 0),
+                    "discrepan": cuenta.get("discrepan", 0),
+                    "sin_dato": cuenta.get("sin_dato", 0),
+                    "ids_distintos": sum(1 for x in items if x["ids_distintos"]
+                                         and x["campo"] == "transporter_id")},
+        "items": items if todo else revisar,
+    }
+
+
+@api_router.post("/transporter-ids/confirmar-par")
+async def transporter_id_confirmar_par(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """«Esta pareja esta bien»: el nombre de Amazon no se parece al de la ficha
+    pero es la misma persona (un apodo, un apellido de casada). Deja de salir.
+
+    Se comprueba que la ficha tenga de verdad ese ID: confirmar una pareja que no
+    existe dejaria pasar despues la equivocacion buena.
+    """
+    tid = _texto_cuerpo(data.get("transporter_id")).upper()
+    fid = _texto_cuerpo(data.get("ficha_id"))
+    if not _DIA_TID.match(tid) or not fid:
+        raise HTTPException(400, "Faltan el Transporter ID o la ficha")
+    f = await db.drivers.find_one(
+        {"id": fid, "$or": [{"transporter_id": tid}, {"driver_id": tid}]},
+        {"_id": 0, "id": 1, "name": 1, "center": 1})
+    if not f:
+        raise HTTPException(404, "Esa ficha no tiene ese ID")
+    if not _user_can_see_center(user, f.get("center") or ""):
+        raise HTTPException(403, "Esa ficha es de otro centro")
+    await db.app_meta.update_one(
+        {"_id": "transporter_ids_confirmados"},
+        {"$set": {"mapa.%s" % tid: fid, "por": user.get("name") or user.get("sub") or "oficina",
+                  "en": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"ok": True, "transporter_id": tid, "ficha": f.get("name")}
 
 
 # Volumen minimo para que un conductor entre en el ranking de impacto. Con 20
@@ -43119,19 +43604,49 @@ async def whc_semana(center: str, _=Depends(require_admin)):
     bloque_duro = int(leap.get("dailyHardThreshold") or 0)
     acerca = int(leap.get("approachingWeeklyThreshold") or 0)
 
-    gente = d.get("conductores") or []
-    ev = _whc_evaluar([dict(c) for c in gente], limite, bloque, None)
-    # La proyeccion EXACTA: lo trabajado mas lo que tiene puesto por delante.
+    # SE CLASIFICA AL LEER, con el «hoy» de ahora y no el de la captura: un dia
+    # que era futuro hace tres horas puede ya no serlo. Ver `_whc_clasificar`.
+    ahora_ms = int(time.time() * 1000)
+    captura_ms = _iso_a_ms(d.get("updated_at")) or ahora_ms
+    formato_antiguo = False
+    gente = []
+    for c in d.get("conductores") or []:
+        reservas = c.get("reservas")
+        if reservas is None:
+            # Documento guardado antes: solo se recupera lo que ya estaba
+            # fichado, y su proyeccion no se puede dar por completa.
+            formato_antiguo = True
+            reservas = _whc_reservas_de_bloques(c.get("bloques") or [], captura_ms)
+        base = {k: v for k, v in c.items()
+                if k not in ("reservas", "bloques", "trabajado", "planificado_restante",
+                             "bloques_restantes", "proyeccion")}
+        gente.append({**base, **_whc_clasificar(reservas, hoy, captura_ms, ahora_ms)})
+    ev = _whc_evaluar(gente, limite, bloque, None)
     for c in ev:
-        pend = c.get("planificado_restante") or 0
-        c["proyeccion"] = (c.get("trabajado") or 0) + pend
-        c["proyeccion_pasa"] = bool(limite and c["proyeccion"] > limite)
-        c["acercandose"] = bool(acerca and c["proyeccion"] >= acerca
-                                and not c["proyeccion_pasa"])
-    ev.sort(key=lambda c: (not c["proyeccion_pasa"], -(c.get("proyeccion") or 0)))
+        proy = c.get("proyeccion") or 0
+        # Una proyeccion sin el detalle de lo que quedaba por hacer no se da.
+        c["proyeccion_pasa"] = bool(limite and not formato_antiguo and proy > limite
+                                    and not c["supera_semanal"])
+        c["acercandose"] = bool(acerca and not formato_antiguo and proy >= acerca
+                                and not c["proyeccion_pasa"] and not c["supera_semanal"])
+        # Con la semana ya pasada no hay nada que proyectar: es un hecho.
+        # «Posible»: lo fichado no llega, pero hay dias con entrada y sin salida
+        # y contados por lo planificado si que llegarian. No se afirma: se pide
+        # mirarlo, porque la salida sin fichar es el dato que falta.
+        c["posible_pasado"] = bool(
+            limite and not c["supera_semanal"]
+            and (c.get("trabajado") or 0) + (c.get("sin_salida_min") or 0) > limite)
+    ev.sort(key=lambda c: (not c["supera_semanal"], not c["posible_pasado"],
+                           not c["proyeccion_pasa"], -(c.get("proyeccion") or 0)))
+    antig = max(0, int((ahora_ms - captura_ms) / 60000))
     return {
         "hay": True, "centro": nave, "semana": sun, "hasta": d.get("hasta"),
         "actualizado": d.get("updated_at"),
+        # Cuanto hace que se leyo de Cortex. Sin esto, un dato de hace medio dia
+        # se lee como el de ahora: es «que se actualice bien».
+        "antiguedad_min": antig,
+        "de_otro_dia": _dia_de_ms(captura_ms) != hoy,
+        "formato_antiguo": formato_antiguo,
         "fuente": "amazon",
         "limites": {
             "semanal_duro": limite, "semanal_blando": leap.get("weeklySoftThreshold"),
@@ -43145,7 +43660,9 @@ async def whc_semana(center: str, _=Depends(require_admin)):
             "pasan_proyectando": sum(1 for c in ev if c["proyeccion_pasa"]),
             "acercandose": sum(1 for c in ev if c.get("acercandose")),
             "ya_pasados": sum(1 for c in ev if c.get("supera_semanal")),
+            "posibles": sum(1 for c in ev if c.get("posible_pasado")),
             "jornada_pasada": sum(1 for c in ev if c.get("bloques_pasados")),
+            "sin_salida": sum(1 for c in ev if c.get("sin_salida_n")),
         },
     }
 
@@ -43181,12 +43698,20 @@ async def whc_estado(_=Depends(require_admin)):
 
     fuera = []
     for nave in naves:
-        ult = await db.whc_planes.find_one({"center": nave}, {"_id": 0},
-                                           sort=[("week", -1)])
+        # Las DOS fuentes: lo que Cortex manda solo (`whc_api`) y el plan pegado a
+        # mano (`whc_planes`). Antes solo se miraba lo pegado, asi que OGA5 salia
+        # «sin plan nunca» teniendo 96 conductores llegando de Cortex cada dia.
+        ult_a = await db[_WHC_API_COL].find_one({"center": nave}, {"_id": 0, "conductores": 0},
+                                                sort=[("week", -1)])
+        ult_p = await db.whc_planes.find_one({"center": nave}, {"_id": 0},
+                                             sort=[("week", -1)])
+        ult = max((x for x in (ult_a, ult_p) if x),
+                  key=lambda x: (x.get("week") or "", x.get("updated_at") or ""), default=None)
         fuera.append({
             "centro": nave,
             "semana": (ult or {}).get("week"),
             "actualizado": (ult or {}).get("updated_at"),
+            "fuente": ("cortex" if ult is ult_a else "pegado") if ult else None,
             "al_dia": bool(ult and ult.get("week") == sun),
             # Semanas de retraso, para que se vea de un vistazo cuanto hace.
             "semanas_atras": (
@@ -43203,10 +43728,10 @@ async def whc_estado(_=Depends(require_admin)):
         # manda la pantalla que este abierta, asi que el plan de una nave solo
         # entra si alguien abre SU pantalla de Programacion en Cortex.
         "como_se_arregla": (
-            "Abre en el PC de la oficina la pantalla de Programacion de Cortex "
-            "con %s seleccionad%s. La extension lo manda sola en unos segundos "
-            "y ya no hay que volver a hacerlo esa semana."
-            % (" y ".join(faltan), "a" if len(faltan) == 1 else "as")) if faltan else "",
+            "No ha entrado el plan de %s desde Cortex. La extension lo lee sola con "
+            "Cortex abierto en el PC de la oficina; si no llega, abre ahi la pantalla "
+            "de Programacion y se manda en unos segundos."
+            % " y ".join(faltan)) if faltan else "",
     }
 
 

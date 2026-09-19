@@ -1725,6 +1725,52 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    una). Ojo: filtra el MENU y las RUTAS del panel, no la API — la API sigue
    respondiendo a quien la llame con su token.
 
+81. **«Ya pasados» contaba lo PLANIFICADO como si fuera lo HECHO, y el WHC acusaba
+   a quien no se habia pasado.** El 19-09-2026 la pantalla decia «18 ya pasados» en
+   OGA5 (24 de 160 personas entre las tres naves) y los que de verdad habian
+   pasado las 55 h fichadas eran **2**. El bloque EN CURSO se sumaba por sus 9 h
+   planificadas: Gabriel Miragaya salia con 59h57 y llevaba 50h57 cerradas. Y un
+   dia YA PASADO sin entrada fichada se contaba como «pendiente», asi que la
+   proyeccion de quien falto o libraba salia inflada (6 personas con mas de un
+   dia pendiente el ultimo dia de la semana).
+   Reglas: **separar lo que se AFIRMA de lo que se PROYECTA** —cerrado (fichaje
+   completo), en curso (lo que lleva hasta la lectura), sin salida (dia pasado
+   con entrada y sin salida: hubo trabajo, no se sabe cuanto; se cuenta aparte y
+   se dice), pendiente (dia futuro o la hora de hoy que no ha pasado)—; **guardar
+   las reservas CRUDAS y clasificar AL LEER**, con el «hoy» de ahora, porque «un
+   dia que aun no ha llegado» depende de CUANDO se mira; y **enseñar la edad del
+   dato**. Con lectura de Cortex cada 3 h el numero tenia de media hora y media
+   de antiguedad: la extension (2.93) lo pide cada 15 min.
+   En el mismo roster viene `driverPersonId` = el Transporter ID (A2...) con el
+   nombre que Amazon le da: se guarda como `transporter_id`. `driverProviderId`
+   es otra cosa y NO es el ID que se pega en Cortex.
+   `test_whc_api.py` lee las funciones reales y esta probado reintroduciendo los
+   dos fallos (6 tests caen).
+
+82. **Un Transporter ID puesto en una ficha NO esta verificado, y «quitarlo»
+   podia no quitar nada.** El 19-09-2026 el ID de Alberto Brion Pineiro estaba
+   colgado de ALBERTO VAZQUEZ ARIAS (elegido en el desplegable de Diarios) y no
+   habia forma de arreglarlo desde la pantalla: (a) el ID vive en DOS campos
+   (gotcha 79) y `quitar` solo vaciaba `transporter_id`, contestando «ok,
+   quitado de 0» cuando estaba en `driver_id`; (b) la ficha, ademas, se quedo
+   con DOS IDs de Amazon distintos —el suyo en `driver_id` y el ajeno en
+   `transporter_id`—, algo que el 29-08 se habia medido en cero; (c) el relleno
+   automatico de `sin-transporter` solo miraba `transporter_id` y podia crear
+   ese mismo estado; (d) nada contrastaba el ID con lo que Amazon dice de el.
+   Ahora `_amazon_nombres` vota (roster de Programacion x3, resumen de Cortex,
+   historial de rutas) y `/transporter-ids/verificar` + la fila de Diarios
+   ensenan «Amazon dice que X es Y» con tres salidas: quitarlo (de los dos
+   campos), pasarlo a la persona que es —solo si su nombre lleva a UNA ficha— o
+   «esta bien» (`transporter_ids_confirmados`, por pareja). Asignar frena con
+   409 si Amazon dice que es otra persona o la ficha ya tiene otro ID, y se
+   repite con `forzar: true`; cada cambio queda en `transporter_id_cambios`.
+   Solo se acusa con evidencia firme (roster, o >= 2 votos sin fuentes que se
+   contradigan): un voto suelto es «sin dato», no «no coincide». La comparacion
+   de nombres aguanta tildes, orden de apellidos, apellido de mas y erratas
+   (`Birichinag` = `Birichinaga`) y NO da por iguales a dos con el mismo nombre
+   de pila (`JOSE MANUEL ARES` vs `JOSE MANUEL MARTINEZ`).
+   `test_ids_amazon.py`, probado quitando el umbral de evidencia.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

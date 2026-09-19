@@ -6,11 +6,12 @@ import {
 } from 'lucide-react'
 import {
   pegarDiario, diariosPorConductor, vincularTransporterIds, asignarIdConductor, getDrivers,
-  subirDiarios,
+  subirDiarios, verificarTransporterIds,
 } from '../api'
 import { lista } from '../../lib/lista'
 import { useOrden } from '../../lib/orden'
 import ThOrden from '../components/ThOrden'
+import AvisoIdAmazon from '../components/AvisoIdAmazon'
 import { isoLocal } from '../../lib/fecha'
 
 /* ── CONTADOR DE DNRs ────────────────────────────────────────────────────────
@@ -89,6 +90,10 @@ export default function Diarios() {
   const [corrigiendo, setCorrigiendo] = useState(null)
 
   const [verIds, setVerIds] = useState(false)
+  /* Las fichas con ID contrastadas con lo que dice Amazon (roster de
+     Programación, resumen de Cortex, historial de rutas). */
+  const [verif, setVerif] = useState(null)
+  const [verifCargando, setVerifCargando] = useState(false)
   const [textoIds, setTextoIds] = useState('')
   const [previaIds, setPreviaIds] = useState(null)
 
@@ -216,15 +221,39 @@ export default function Diarios() {
     } finally { setOcupado('') }
   }
 
-  const ponerNombre = async (tid, driverId) => {
+  const comprobarIds = async () => {
+    setVerifCargando(true); setErr('')
+    try {
+      const r = await verificarTransporterIds(center)
+      setVerif(r.data)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo comprobar contra Amazon.')
+    } finally { setVerifCargando(false) }
+  }
+
+  /* Si Amazon dice que ese ID es OTRA persona, o la ficha ya tiene otro ID, el
+     servidor contesta 409 con el motivo y aquí se pregunta: no se asigna en
+     silencio (así se colgó el ID de Alberto Brion a Alberto Vázquez). */
+  const ponerNombre = async (tid, driverId, forzar = false) => {
     setAsignando(tid); setErr('')
     try {
-      const r = await asignarIdConductor({ transporter_id: tid, driver_id: driverId })
-      setAviso(`${tid} → ${r.data.driver_name}`)
+      const r = await asignarIdConductor({ transporter_id: tid, driver_id: driverId, forzar })
+      setAviso(driverId
+        ? `${tid} → ${r.data.driver_name}${r.data.quitado_a?.length ? ` (quitado de ${r.data.quitado_a.join(', ')})` : ''}`
+        : `${tid} quitado${r.data.quitado_a?.length ? ` de ${r.data.quitado_a.join(', ')}` : ''}: ahora no tiene ficha.`)
       await cargar()
     } catch (e) {
-      setErr(e?.response?.data?.detail || 'No se pudo asignar.')
+      const det = e?.response?.data?.detail
+      if (e?.response?.status === 409 && typeof det === 'string' && !forzar) {
+        setAsignando('')
+        if (window.confirm(`${det}
+
+¿Asignarlo igualmente?`)) return ponerNombre(tid, driverId, true)
+        return undefined
+      }
+      setErr(det || 'No se pudo asignar.')
     } finally { setAsignando('') }
+    return undefined
   }
 
   /* Ordenar pulsando la cabecera: quien mas DNRs, mas defectos, mas euros.
@@ -543,6 +572,58 @@ export default function Diarios() {
             <button onClick={() => { setVerIds(false); setPreviaIds(null) }}
               className="ml-auto text-dark-500 hover:text-dark-200"><X size={16} /></button>
           </div>
+          {/* COMPROBAR CONTRA AMAZON. Un ID puesto en una ficha no está
+              verificado: esto lo contrasta con lo que Amazon dice de cada ID. */}
+          <div className="mb-3 rounded-lg border border-dark-800 bg-dark-950/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={comprobarIds} disabled={verifCargando}
+                className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+                {verifCargando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                Comprobar los IDs contra Amazon
+              </button>
+              <span className="text-[11.5px] text-dark-500">
+                Mira cada ficha con ID y lo compara con el nombre que Amazon da a ese ID. No cambia nada.
+              </span>
+            </div>
+            {verif && (
+              <div className="mt-3 space-y-2">
+                <p className="text-[12.5px] text-dark-300">
+                  {verif.fichas_con_id} fichas con ID ·{' '}
+                  <b className="text-emerald-300">{verif.resumen.coinciden} coinciden</b>
+                  {verif.resumen.no_coinciden > 0 && <> · <b className="text-red-300">{verif.resumen.no_coinciden} no coinciden</b></>}
+                  {verif.resumen.parecidos > 0 && <> · {verif.resumen.parecidos} parecidos</>}
+                  {verif.resumen.ids_distintos > 0 && <> · <b className="text-red-300">{verif.resumen.ids_distintos} con dos IDs distintos</b></>}
+                  {verif.resumen.sin_dato > 0 && <> · <span className="text-dark-500">{verif.resumen.sin_dato} sin dato de Amazon para comparar</span></>}
+                </p>
+                {verif.items.length === 0 && (
+                  <p className="text-[12.5px] text-emerald-300">Nada que revisar: ningún ID contradice a Amazon.</p>
+                )}
+                <ul className="space-y-2">
+                  {verif.items.map((v) => (
+                    <li key={`${v.ficha_id}-${v.transporter_id}`}
+                      className="rounded-lg border border-dark-800 px-3 py-2 text-[12.5px]">
+                      <span className="text-dark-200">{v.ficha}</span>
+                      <span className="ml-2 font-mono text-[10.5px] text-dark-500">{v.transporter_id}</span>
+                      {v.de_baja && <span className="ml-1.5 rounded bg-dark-800 px-1 text-[9px] text-dark-300">ya no está</span>}
+                      {v.estado === 'no_coincide' ? (
+                        <AvisoIdAmazon tid={v.transporter_id} fichaId={v.ficha_id} ficha={v.ficha}
+                          amazon={v.amazon_nombre} propuesta={v.propuesta} distintos={v.ids_distintos}
+                          onHecho={async () => { await comprobarIds(); await cargar() }}
+                          onError={setErr} />
+                      ) : (
+                        <p className="mt-0.5 text-[11.5px] text-amber-300">
+                          {v.estado === 'parecido' && <>Amazon dice «{v.amazon_nombre}»: el nombre se parece pero no es igual. Revísalo.</>}
+                          {v.estado === 'discrepan' && <>Las fuentes de Amazon no se ponen de acuerdo sobre quién es (una dice «{v.amazon_nombre}»).</>}
+                          {v.ids_distintos && v.estado !== 'no_coincide' && <> Esta ficha tiene dos IDs de Amazon distintos ({v.otro_id}).</>}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
           <p className="mb-2 text-[12.5px] leading-relaxed text-dark-400">
             Una persona por línea: nombre, tabulador, ID. Los nombres no tienen que estar
             escritos igual que en las fichas — se emparejan por palabras. Antes de guardar
@@ -776,6 +857,11 @@ export default function Diarios() {
                               : 'Sin ficha de conductor en la app (oficina, o alguien que se fue antes)'}>
                           {c.de_baja ? 'ya no está' : c.ficha_sin_vincular ? 'ID sin vincular' : 'sin ficha'}
                         </span>
+                      )}
+                      {c.verif === 'no_coincide' && c.amazon_nombre && (
+                        <AvisoIdAmazon tid={c.transporter_id} fichaId={c.driver_id} ficha={c.driver_name}
+                          amazon={c.amazon_nombre} propuesta={c.propuesta}
+                          onHecho={cargar} onError={setErr} />
                       )}
                     </td>
                     <td className="px-3 py-1.5 font-mono text-[10.5px] text-dark-600">{c.transporter_id}</td>

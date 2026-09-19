@@ -644,7 +644,12 @@ async function pedirEnlacesFrescos() {
    nuestras. Se cruza contra la lista que da el backend y se exige coincidencia
    EXACTA; si una nave casara con dos areas no se pide ninguna. Pedir el
    cuadrante de otro DSP no es un error tecnico, es mirar donde no se debe. */
-const HORARIOS_CADA_MS = 3 * 60 * 60 * 1000;      // cuatro veces al dia
+/* CADA 15 MINUTOS (antes cada tres horas, 2.93). Con tres horas de por medio, lo que
+   la pantalla de WHC ensenaba tenia de media hora y media de antiguedad y hasta tres,
+   y el dia que entra o sale alguien en ruta eso ya es otro dato: «que se actualice
+   bien». Cuesta dos peticiones pequenas por nave y la respuesta solo la lee esta
+   funcion, no el barrido de rutas. */
+const HORARIOS_CADA_MS = 15 * 60 * 1000;
 const CORTEX_ORIGEN = 'https://logistics.amazon.es';
 
 /** Domingo y sabado de la semana de HOY, en AAAA-MM-DD.
@@ -1432,7 +1437,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   pedirEnlacesFrescos();
   /* Y el plan de horas de las tres naves, que ya no depende de que nadie abra
      la pantalla de Programacion: se pide a la API que esa pantalla usa. Cada
-     tres horas, y la funcion decide sola si toca. */
+     quince minutos, y la funcion decide sola si toca. */
   pedirHorarios();
   // Y las cuentas de onboarding, que si no dependen de que alguien abra esa
   // pantalla. Cada cuatro horas; la funcion decide sola si toca.

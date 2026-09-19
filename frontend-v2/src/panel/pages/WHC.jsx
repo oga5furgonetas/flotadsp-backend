@@ -579,16 +579,37 @@ export default function WHC() {
    · **la proyección es lo que cada uno tiene puesto**, no «seis bloques de
      nueve horas». Con el dato real, de 38 conductores de DGA1 no se pasa
      ninguno; con la suposición salían casi todos «en peligro»;
-   · y entra de las tres naves sin que nadie abra ninguna pantalla. */
+   · y entra de las tres naves sin que nadie abra ninguna pantalla.
+
+   LO QUE SE AFIRMA Y LO QUE SE PROYECTA, separado (19-09-2026). Esta pantalla
+   decía «18 ya pasados» en OGA5 y eran 2: el bloque en curso se sumaba por sus
+   9 h planificadas. Ahora «ya pasados» es solo lo fichado (más lo que lleva el
+   bloque en curso hasta la lectura), y lo demás va con su nombre:
+     · posibles      → lo fichado no llega, pero tiene días con entrada y SIN
+                       salida: pasaría si duraron lo planificado. Hay que mirarlo.
+     · se pasarían   → proyección: lo hecho más lo que tiene puesto por delante. */
+function haceCuanto(min) {
+  if (min < 2) return 'ahora mismo'
+  if (min < 60) return `hace ${min} min`
+  if (min < 24 * 60) return `hace ${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`
+  return `hace ${Math.floor(min / (24 * 60))} d`
+}
+
 function HorasDeAmazon({ d, hm }) {
+  const [todos, setTodos] = useState(false)
   const r = d.resumen
   const l = d.limites
   const chips = [
-    ['se pasarían', r.pasan_proyectando, 'bg-red-500/15 text-red-300'],
     ['ya pasados', r.ya_pasados, 'bg-red-500/15 text-red-300'],
+    ['posibles (sin salida fichada)', r.posibles, 'bg-orange-500/15 text-orange-300'],
+    ['se pasarían', r.pasan_proyectando, 'bg-red-500/10 text-red-300'],
     ['acercándose', r.acercandose, 'bg-amber-500/15 text-amber-200'],
     ['jornada larga', r.jornada_pasada, 'bg-orange-500/15 text-orange-300'],
   ].filter(([, n]) => n > 0)
+  const viejo = d.de_otro_dia || d.antiguedad_min > 90
+  const marcados = d.conductores.filter((c) => c.supera_semanal || c.posible_pasado
+    || c.proyeccion_pasa || c.acercandose || c.bloques_pasados?.length)
+  const vistos = todos ? marcados : marcados.slice(0, 12)
 
   return (
     <div className="card mt-3 p-4">
@@ -601,6 +622,22 @@ function HorasDeAmazon({ d, hm }) {
           {l.jornada_dura ? ` (${hm(l.jornada_dura)} tope)` : ''}
         </span>
       </div>
+
+      {/* CUÁNTO HACE. Un dato de esta mañana no es el de ahora: las horas
+          hechas solo crecen, pero lo que «va a pasar» cambia con cada fichaje. */}
+      <p className={`mt-2 flex items-center gap-1.5 text-[11.5px] ${
+        viejo ? 'font-semibold text-amber-300' : 'text-dark-500'}`}>
+        <Clock size={12} />
+        Leído de Cortex {haceCuanto(d.antiguedad_min)}
+        {d.de_otro_dia && ' · es de otro día: lo hecho vale, lo que “se pasaría” puede haber cambiado'}
+        {!d.de_otro_dia && d.antiguedad_min > 90 && ' · se refresca solo con Cortex abierto en el PC de la oficina'}
+      </p>
+      {d.formato_antiguo && (
+        <p className="mt-1 text-[11.5px] text-amber-300">
+          Es una lectura guardada con el formato anterior: solo se muestra lo fichado. Las
+          proyecciones vuelven en la próxima lectura de Cortex.
+        </p>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <span className="rounded-lg bg-white/[0.04] px-2 py-1 text-xs text-dark-300">
@@ -618,29 +655,45 @@ function HorasDeAmazon({ d, hm }) {
       {/* Solo los que hay que mirar. Una lista de treinta y ocho personas que
           van bien no es información, es scroll. */}
       <ul className="mt-3 space-y-1.5">
-        {d.conductores.filter((c) => c.proyeccion_pasa || c.acercandose
-                                     || c.supera_semanal || c.bloques_pasados?.length)
-          .slice(0, 12).map((c, i) => (
-          <li key={i} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-dark-800 py-1.5 text-xs first:border-0 first:pt-0">
-            <span className="truncate text-dark-200">{c.nombre}</span>
-            <span className="flex shrink-0 items-baseline gap-3 tabular-nums">
+        {vistos.map((c, i) => (
+          <li key={`${c.transporter_id || c.nombre}-${i}`}
+              className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-dark-800 py-1.5 text-xs first:border-0 first:pt-0">
+            <span className="min-w-0 truncate text-dark-200">
+              {c.nombre}
+              {c.supera_semanal && <b className="ml-1.5 text-red-300">ya pasado</b>}
+              {c.posible_pasado && <b className="ml-1.5 text-orange-300">revisar</b>}
+            </span>
+            <span className="flex shrink-0 flex-wrap items-baseline justify-end gap-x-3 tabular-nums">
               <span className="text-dark-300">{hm(c.trabajado)} hechas</span>
+              {c.sin_salida_min > 0 && (
+                <span className="text-orange-300"
+                  title="Días con entrada fichada y sin salida: se cuentan por lo planificado, no se afirman.">
+                  +{hm(c.sin_salida_min)} sin salida ({c.sin_salida_n})
+                </span>
+              )}
               {c.planificado_restante > 0 && (
                 <span className="text-dark-500">+{hm(c.planificado_restante)} puestas</span>
               )}
               <span className={`w-[5.5rem] text-right font-semibold ${
-                c.proyeccion_pasa ? 'text-red-300' : 'text-amber-200'}`}>
+                c.supera_semanal || c.proyeccion_pasa ? 'text-red-300' : 'text-amber-200'}`}>
                 = {hm(c.proyeccion)}
               </span>
             </span>
           </li>
         ))}
       </ul>
+      {marcados.length > 12 && (
+        <button onClick={() => setTodos((v) => !v)}
+          className="mt-2 text-[11.5px] text-dark-400 underline-offset-2 hover:underline">
+          {todos ? 'ver menos' : `ver los ${marcados.length}`}
+        </button>
+      )}
 
       <p className="mt-3 border-t border-dark-800 pt-2 text-[11px] leading-relaxed text-dark-500">
-        Cada bloque trae su duración y su fichaje: aquí no se estima nada. Lo de «puestas»
-        es lo que tiene en el cuadrante los días que le quedan, así que la suma es la
-        semana que va a hacer si no se cambia nada.
+        Cada bloque trae su duración y su fichaje: aquí no se estima nada. «Hechas» es lo
+        fichado más lo que lleva el bloque en curso; «puestas» es lo que tiene en el cuadrante
+        por delante, así que la suma es la semana que hará si no se cambia nada. Un día que
+        ya pasó sin fichar no cuenta.
       </p>
     </div>
   )

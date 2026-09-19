@@ -505,6 +505,9 @@ export const pegarDiario = (body) => api.post('/diarios/pegar', body)
 export const diariosPorConductor = (center, desde, hasta) =>
   api.get('/diarios/conductores', { params: { center, desde, hasta } })
 export const asignarIdConductor = (body) => api.post('/diarios/id-conductor', body)
+export const verificarTransporterIds = (center, todo = false) =>
+  api.get('/transporter-ids/verificar', { params: { center, todo: todo ? 'true' : undefined } })
+export const confirmarParTransporter = (body) => api.post('/transporter-ids/confirmar-par', body)
 export const vincularTransporterIds = (body) => api.post('/diarios/ids', body)
 
 export const exportarCuadrante = (center, desde, hasta) =>
